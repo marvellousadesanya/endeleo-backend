@@ -1,0 +1,50 @@
+{
+  "name": "endeleo-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Endeleo Bond Engine API",
+  "scripts": {
+    "build": "nest build",
+    "start": "nest start",
+    "dev": "nest start --watch",
+    "start:prod": "node dist/main.js",
+    "lint": "eslint \"src/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "migrate": "tsx src/database/migrate.ts up",
+    "migrate:status": "tsx src/database/migrate.ts status",
+    "db:types": "kysely-codegen --out-file src/database/schema.d.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/jwt": "^11.0.0",
+    "@nestjs/passport": "^11.0.5",
+    "@nestjs/platform-express": "^11.1.6",
+    "@node-rs/argon2": "^2.0.2",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "dotenv": "^17.2.1",
+    "helmet": "^8.1.0",
+    "kysely": "^0.28.2",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.10",
+    "@nestjs/schematics": "^11.0.9",
+    "@types/node": "^24.3.0",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/pg": "^8.15.5",
+    "kysely-codegen": "^0.19.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
