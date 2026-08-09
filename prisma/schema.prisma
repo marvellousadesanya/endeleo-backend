@@ -109,3 +109,20 @@ model RefreshToken {
   @@index([expiresAt])
   @@map("refresh_tokens")
 }
+
+/// Cooperative lock so only one instance runs a scheduled job.
+///
+/// A lease rather than a plain flag: if the holder crashes mid-run, the lease expires
+/// and another instance picks the job up, instead of it being wedged forever.
+///
+/// Not a Postgres advisory lock — those are tied to a database session, and Prisma
+/// hands out pooled connections, so the lock and the unlock could land on different
+/// connections. A row we control has no such ambiguity.
+model JobLock {
+  name        String   @id
+  lockedUntil DateTime @map("locked_until") @db.Timestamptz(6)
+  lockedBy    String?  @map("locked_by")
+  lastRunAt   DateTime? @map("last_run_at") @db.Timestamptz(6)
+
+  @@map("job_locks")
+}

@@ -1,9 +1,11 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
 import { AuthModule } from "@/auth/auth.module";
 import { validateEnv } from "@/config/env";
 import { DatabaseModule } from "@/database/database.module";
 import { HealthModule } from "@/health/health.module";
+import { SchedulerModule } from "@/scheduler/scheduler.module";
 import { UsersModule } from "@/users/users.module";
 
 @Module({
@@ -14,7 +16,9 @@ import { UsersModule } from "@/users/users.module";
       validate: validateEnv,
       envFilePath: [".env.local", ".env"],
     }),
+    ScheduleModule.forRoot(),
     DatabaseModule,
+    SchedulerModule,
     UsersModule,
     AuthModule,
     HealthModule,
