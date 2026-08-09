@@ -1,17 +1,16 @@
 // Liveness plus a real database round-trip, so a deploy that cannot reach Postgres
 // fails its health check instead of serving errors.
-import { Controller, Get, Inject, ServiceUnavailableException } from "@nestjs/common";
-import { sql } from "kysely";
-import { DB, type Db } from "@/database/database.module";
+import { Controller, Get, ServiceUnavailableException } from "@nestjs/common";
+import { PrismaService } from "@/database/prisma.service";
 
 @Controller("health")
 export class HealthController {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   @Get()
   async check() {
     try {
-      await sql`select 1`.execute(this.db);
+      await this.prisma.$queryRaw`SELECT 1`;
     } catch {
       throw new ServiceUnavailableException({ status: "error", database: "unreachable" });
     }

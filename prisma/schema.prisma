@@ -1,0 +1,111 @@
+// Endeleo backend schema.
+//
+// NOTE FOR READERS: not everything about this database is visible here. Postgres-level
+// guarantees — triggers, constraints and the atomic money procedures — live as raw SQL
+// inside the migration files under prisma/migrations. Prisma does not model them, so
+// `schema.prisma` alone is not the full picture of what the database enforces.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Connection URL lives in prisma.config.ts (Prisma 7).
+}
+
+enum UserStatus {
+  active
+  suspended
+  closed
+
+  @@map("user_status")
+}
+
+enum Role {
+  admin
+  editor
+  issuer
+  investor
+
+  @@map("user_role")
+}
+
+/// Endeleo's own identity. This id — not an auth provider's — is the domain key that
+/// holdings, subscriptions and audit entries will reference.
+model User {
+  id       String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Always stored lowercase; normalise before writing or looking up.
+  email    String     @unique
+  fullName String?    @map("full_name")
+  status   UserStatus @default(active)
+  /// Drives what an investor is allowed to subscribe to.
+  kycTier  Int        @default(0) @map("kyc_tier") @db.SmallInt
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  credential    UserCredential?
+  identities    UserIdentity[]
+  roles         UserRoleAssignment[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+/// Passwords, kept apart from the user record so an account can exist without one
+/// (invited, or sign-in-with-provider only).
+model UserCredential {
+  userId       String   @id @map("user_id") @db.Uuid
+  passwordHash String   @map("password_hash")
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_credentials")
+}
+
+/// Reserved for external identity providers. Empty today — its existence is what keeps
+/// the door open to swapping provider without touching the bond registry.
+model UserIdentity {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  provider  String
+  subject   String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+  @@map("user_identities")
+}
+
+model UserRoleAssignment {
+  userId String @map("user_id") @db.Uuid
+  role   Role
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@map("user_roles")
+}
+
+/// Refresh tokens are stored hashed and rotated on every use. `replacedBy` chains a
+/// token to its successor, so a replayed token exposes the whole session family.
+model RefreshToken {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  replacedBy String?   @map("replaced_by") @db.Uuid
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}

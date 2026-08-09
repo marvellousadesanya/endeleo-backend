@@ -1,84 +1,87 @@
 // Users are the domain's identity. Everything downstream (holdings, subscriptions,
 // audit entries) will reference users.id — never an auth provider's id.
-import { Inject, Injectable } from "@nestjs/common";
-import { DB, type Db } from "@/database/database.module";
+import { Injectable } from "@nestjs/common";
+import type { Role, UserStatus } from "@prisma/client";
+import { PrismaService } from "@/database/prisma.service";
 
 export interface UserWithRoles {
   id: string;
   email: string;
-  full_name: string | null;
-  status: "active" | "suspended" | "closed";
-  kyc_tier: number;
-  roles: string[];
+  fullName: string | null;
+  status: UserStatus;
+  kycTier: number;
+  roles: Role[];
+}
+
+/** Emails are stored lowercase, so every lookup must normalise the same way. */
+export function normaliseEmail(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 @Injectable()
 export class UsersService {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async findById(id: string): Promise<UserWithRoles | undefined> {
-    const user = await this.db
-      .selectFrom("users")
-      .select(["id", "email", "full_name", "status", "kyc_tier"])
-      .where("id", "=", id)
-      .executeTakeFirst();
-    if (!user) return undefined;
-    return { ...user, roles: await this.rolesFor(user.id) };
+  async findById(id: string): Promise<UserWithRoles | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      include: { roles: true },
+    });
+    return user ? toUserWithRoles(user) : null;
   }
 
-  async findByEmail(email: string) {
-    return this.db
-      .selectFrom("users")
-      .select(["id", "email", "full_name", "status", "kyc_tier"])
-      .where("email", "=", email)
-      .executeTakeFirst();
-  }
-
-  async rolesFor(userId: string): Promise<string[]> {
-    const rows = await this.db
-      .selectFrom("user_roles")
-      .select("role")
-      .where("user_id", "=", userId)
-      .execute();
-    return rows.map((r) => r.role);
+  async findByEmail(email: string): Promise<UserWithRoles | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { email: normaliseEmail(email) },
+      include: { roles: true },
+    });
+    return user ? toUserWithRoles(user) : null;
   }
 
   /**
-   * Create a user and their password in one transaction — a user row with no
-   * credentials would be an account nobody can ever sign in to.
+   * Create the user, their password and their default role together. Prisma nests these
+   * writes into one transaction, so a user can never exist without a way to sign in.
    */
   async createWithPassword(input: {
     email: string;
     passwordHash: string;
     fullName?: string;
   }): Promise<UserWithRoles> {
-    return this.db.transaction().execute(async (trx) => {
-      const user = await trx
-        .insertInto("users")
-        .values({ email: input.email, full_name: input.fullName ?? null })
-        .returning(["id", "email", "full_name", "status", "kyc_tier"])
-        .executeTakeFirstOrThrow();
-
-      await trx
-        .insertInto("user_credentials")
-        .values({ user_id: user.id, password_hash: input.passwordHash })
-        .execute();
-
-      await trx
-        .insertInto("user_roles")
-        .values({ user_id: user.id, role: "investor" })
-        .execute();
-
-      return { ...user, roles: ["investor"] };
+    const user = await this.prisma.user.create({
+      data: {
+        email: normaliseEmail(input.email),
+        fullName: input.fullName ?? null,
+        credential: { create: { passwordHash: input.passwordHash } },
+        roles: { create: { role: "investor" } },
+      },
+      include: { roles: true },
     });
+    return toUserWithRoles(user);
   }
 
   async passwordHashFor(userId: string): Promise<string | undefined> {
-    const row = await this.db
-      .selectFrom("user_credentials")
-      .select("password_hash")
-      .where("user_id", "=", userId)
-      .executeTakeFirst();
-    return row?.password_hash;
+    const row = await this.prisma.userCredential.findUnique({
+      where: { userId },
+      select: { passwordHash: true },
+    });
+    return row?.passwordHash;
   }
+}
+
+function toUserWithRoles(user: {
+  id: string;
+  email: string;
+  fullName: string | null;
+  status: UserStatus;
+  kycTier: number;
+  roles: { role: Role }[];
+}): UserWithRoles {
+  return {
+    id: user.id,
+    email: user.email,
+    fullName: user.fullName,
+    status: user.status,
+    kycTier: user.kycTier,
+    roles: user.roles.map((r) => r.role),
+  };
 }

@@ -6,17 +6,12 @@
 //     hand an attacker usable sessions.
 //   * Refresh tokens rotate on every use. Replaying a rotated token is treated as theft
 //     and revokes the entire session family.
-import {
-  ConflictException,
-  Inject,
-  Injectable,
-  UnauthorizedException,
-} from "@nestjs/common";
+import { ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { hash as argonHash, verify as argonVerify } from "@node-rs/argon2";
 import { createHash, randomBytes } from "node:crypto";
-import { DB, type Db } from "@/database/database.module";
+import { PrismaService } from "@/database/prisma.service";
 import { UsersService, type UserWithRoles } from "@/users/users.service";
 
 export interface TokenPair {
@@ -50,7 +45,7 @@ function ttlToMs(ttl: string): number {
 @Injectable()
 export class AuthService {
   constructor(
-    @Inject(DB) private readonly db: Db,
+    private readonly prisma: PrismaService,
     private readonly users: UsersService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
@@ -82,8 +77,8 @@ export class AuthService {
     if (!user || !ok) throw new UnauthorizedException("Invalid email or password");
     if (user.status !== "active") throw new UnauthorizedException("Account is not active");
 
-    const roles = await this.users.rolesFor(user.id);
-    return this.issue({ ...user, roles }, userAgent);
+    // findByEmail already includes roles.
+    return this.issue(user, userAgent);
   }
 
   /**
@@ -94,51 +89,42 @@ export class AuthService {
    */
   async refresh(token: string, userAgent?: string): Promise<AuthResult> {
     const tokenHash = hashToken(token);
-    const row = await this.db
-      .selectFrom("refresh_tokens")
-      .selectAll()
-      .where("token_hash", "=", tokenHash)
-      .executeTakeFirst();
+    const row = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
 
     if (!row) throw new UnauthorizedException("Invalid refresh token");
 
-    if (row.revoked_at || row.replaced_by) {
-      await this.revokeAllForUser(row.user_id);
+    if (row.revokedAt || row.replacedBy) {
+      await this.revokeAllForUser(row.userId);
       throw new UnauthorizedException("Refresh token reuse detected — all sessions revoked");
     }
-    if (new Date(row.expires_at) < new Date()) {
+    if (row.expiresAt < new Date()) {
       throw new UnauthorizedException("Refresh token expired");
     }
 
-    const user = await this.users.findById(row.user_id);
+    const user = await this.users.findById(row.userId);
     if (!user || user.status !== "active") throw new UnauthorizedException("Account is not active");
 
     const issued = await this.issue(user, userAgent);
-    await this.db
-      .updateTable("refresh_tokens")
-      .set({ revoked_at: new Date(), replaced_by: issued.refreshTokenId })
-      .where("id", "=", row.id)
-      .execute();
+    await this.prisma.refreshToken.update({
+      where: { id: row.id },
+      data: { revokedAt: new Date(), replacedBy: issued.refreshTokenId },
+    });
 
     return issued;
   }
 
   async logout(token: string): Promise<void> {
-    await this.db
-      .updateTable("refresh_tokens")
-      .set({ revoked_at: new Date() })
-      .where("token_hash", "=", hashToken(token))
-      .where("revoked_at", "is", null)
-      .execute();
+    await this.prisma.refreshToken.updateMany({
+      where: { tokenHash: hashToken(token), revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   }
 
   private async revokeAllForUser(userId: string): Promise<void> {
-    await this.db
-      .updateTable("refresh_tokens")
-      .set({ revoked_at: new Date() })
-      .where("user_id", "=", userId)
-      .where("revoked_at", "is", null)
-      .execute();
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   }
 
   private async issue(
@@ -146,7 +132,7 @@ export class AuthService {
     userAgent?: string,
   ): Promise<AuthResult & { refreshTokenId: string }> {
     const accessToken = await this.jwt.signAsync(
-      { sub: user.id, email: user.email, roles: user.roles, kycTier: user.kyc_tier },
+      { sub: user.id, email: user.email, roles: user.roles, kycTier: user.kycTier },
       {
         secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET"),
         // Seconds, so the config value stays a plain string like "15m" without
@@ -159,16 +145,15 @@ export class AuthService {
     const expiresAt = new Date(
       Date.now() + ttlToMs(this.config.getOrThrow<string>("JWT_REFRESH_TTL")),
     );
-    const stored = await this.db
-      .insertInto("refresh_tokens")
-      .values({
-        user_id: user.id,
-        token_hash: hashToken(refreshToken),
-        expires_at: expiresAt,
-        user_agent: userAgent ?? null,
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
+    const stored = await this.prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashToken(refreshToken),
+        expiresAt,
+        userAgent: userAgent ?? null,
+      },
+      select: { id: true },
+    });
 
     return {
       accessToken,
@@ -177,9 +162,9 @@ export class AuthService {
       user: {
         id: user.id,
         email: user.email,
-        fullName: user.full_name,
+        fullName: user.fullName,
         roles: user.roles,
-        kycTier: user.kyc_tier,
+        kycTier: user.kycTier,
       },
     };
   }
