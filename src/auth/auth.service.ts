@@ -120,6 +120,17 @@ export class AuthService {
     });
   }
 
+  /**
+   * Issue a session for a user whose identity has already been established elsewhere —
+   * currently the social sign-in flow, which verified them via the provider.
+   */
+  async issueForUserId(userId: string, userAgent?: string): Promise<AuthResult> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new UnauthorizedException("User not found");
+    if (user.status !== "active") throw new UnauthorizedException("Account is not active");
+    return this.issue(user, userAgent);
+  }
+
   private async revokeAllForUser(userId: string): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: { userId, revokedAt: null },

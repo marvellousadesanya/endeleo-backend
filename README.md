@@ -46,6 +46,27 @@ foreign keys.
 **Money is `BigInt`.** Prisma maps Postgres `bigint` to JavaScript `BigInt`, which holds
 kobo values safely. Note `JSON.stringify` throws on `BigInt` — convert at the API edge.
 
+## Social sign-in (Google)
+
+Disabled until `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set; `/api/auth/google`
+returns 503 until then. In Google Cloud, register the authorised redirect URI as
+`<PUBLIC_API_URL>/api/auth/google/callback`.
+
+```
+GET  /api/auth/google           → redirects to Google (state + PKCE in an httpOnly cookie)
+GET  /api/auth/google/callback  → verifies, then redirects to FRONTEND_URL/auth/callback?code=...
+POST /api/auth/oauth/exchange   → trades that one-time code for a token pair
+```
+
+Scopes are `openid email profile` — identity only, no access to mail or contacts.
+
+The browser is redirected back with a single-use code rather than the tokens themselves,
+so tokens never appear in a URL, browser history or a Referer header.
+
+Accounts are linked by email **only when the provider reports it verified**. Otherwise
+someone could register a provider account claiming another person's address and take
+over their Endeleo account.
+
 ## Auth flow
 
 `POST /api/auth/register` · `POST /api/auth/login` → access token (15m) + refresh token (30d).

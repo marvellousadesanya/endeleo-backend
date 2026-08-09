@@ -49,6 +49,7 @@ model User {
   identities    UserIdentity[]
   roles         UserRoleAssignment[]
   refreshTokens RefreshToken[]
+  exchangeCodes OAuthExchangeCode[]
 
   @@map("users")
 }
@@ -125,4 +126,23 @@ model JobLock {
   lastRunAt   DateTime? @map("last_run_at") @db.Timestamptz(6)
 
   @@map("job_locks")
+}
+
+/// One-time code handed to the browser after a social sign-in.
+///
+/// The alternative is redirecting with the real tokens in the URL, which leaks them
+/// into browser history, the Referer header and server logs. Instead the browser gets
+/// a short-lived single-use code and exchanges it for tokens over POST.
+model OAuthExchangeCode {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  codeHash  String    @unique @map("code_hash")
+  userId    String    @map("user_id") @db.Uuid
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("oauth_exchange_codes")
 }

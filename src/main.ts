@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { Logger, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
+import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
 
@@ -10,6 +11,7 @@ async function bootstrap() {
   const config = app.get(ConfigService);
 
   app.use(helmet());
+  app.use(cookieParser());
   app.setGlobalPrefix("api");
   app.enableShutdownHooks();
 

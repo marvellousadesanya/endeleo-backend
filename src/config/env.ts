@@ -14,6 +14,16 @@ const envSchema = z.object({
   JWT_ACCESS_TTL: z.string().default("15m"),
   JWT_REFRESH_TTL: z.string().default("30d"),
 
+  // Where the browser is sent back to after a social sign-in.
+  FRONTEND_URL: z.string().url().default("http://localhost:8080"),
+  // This API's own public base URL — must match the redirect URI registered with Google.
+  PUBLIC_API_URL: z.string().url().default("http://localhost:4000"),
+
+  // Optional: social sign-in stays switched off until both are provided, so the app
+  // boots fine without Google credentials.
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+
   CORS_ORIGINS: z
     .string()
     .default("")
