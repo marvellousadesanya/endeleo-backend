@@ -6,6 +6,13 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
 
+// Money is stored as BIGINT and reaches us as JavaScript BigInt, which JSON.stringify
+// refuses to serialise. Render it as a string so precision survives the wire — a JSON
+// number would silently round anything past 2^53.
+(BigInt.prototype as unknown as { toJSON: () => string }).toJSON = function (this: bigint) {
+  return this.toString();
+};
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const config = app.get(ConfigService);

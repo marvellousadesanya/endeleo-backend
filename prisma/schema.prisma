@@ -51,6 +51,17 @@ model User {
   refreshTokens RefreshToken[]
   exchangeCodes OAuthExchangeCode[]
 
+  issuedBonds      Bond[]            @relation("BondIssuer")
+  subscriptions    Subscription[]
+  holdings         Holding[]
+  couponPayments   CouponPayment[]
+  taxRecords       TaxRecord[]
+  principalReturns PrincipalReturn[]
+  listings         MarketListing[]
+  soldTrades       MarketTrade[]     @relation("TradeSeller")
+  boughtTrades     MarketTrade[]     @relation("TradeBuyer")
+  auditEntries     BondAuditEntry[]
+
   @@map("users")
 }
 
@@ -145,4 +156,389 @@ model OAuthExchangeCode {
 
   @@index([expiresAt])
   @@map("oauth_exchange_codes")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOND ENGINE
+//
+// Money is stored in minor units (kobo) as BIGINT, never as a decimal or float.
+// Prisma maps these to JavaScript BigInt. Note JSON.stringify cannot serialise
+// BigInt — main.ts installs a toJSON that renders them as strings, so money
+// crosses the API as "2000000" rather than losing precision as a JS number.
+//
+// Guarantees Prisma cannot express — the status state machine, the oversell
+// backstop, audit-log immutability, and the atomic allocate/trade/cancel
+// procedures — are hand-written SQL inside this model's migration.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum BondStatus {
+  draft
+  open
+  subscribed
+  active
+  matured
+  closed
+  defaulted
+
+  @@map("bond_status")
+}
+
+enum Currency {
+  NGN
+  USD
+  GBP
+  EUR
+
+  @@map("bond_currency")
+}
+
+enum CouponFrequency {
+  monthly
+  quarterly
+  semiannual
+  annual
+  zero
+
+  @@map("coupon_frequency")
+}
+
+enum AllocationRule {
+  fcfs
+  pro_rata
+  waitlist
+
+  @@map("allocation_rule")
+}
+
+enum SubscriptionStatus {
+  pending
+  allocated
+  waitlisted
+  cancelled
+  refunded
+
+  @@map("subscription_status")
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  retry
+  escalated
+
+  @@map("payment_status")
+}
+
+enum RedemptionStage {
+  t_minus_90
+  t_minus_30
+  t_minus_7 // missing from the original engine; the spec calls for bondholder notices
+  maturity
+  default_declared
+  archived
+
+  @@map("redemption_stage")
+}
+
+enum EscrowPurpose {
+  coupon
+  principal
+  default_reserve
+
+  @@map("escrow_purpose")
+}
+
+enum ListingStatus {
+  active
+  filled
+  cancelled
+  expired
+
+  @@map("listing_status")
+}
+
+/// A bond's term sheet and lifecycle position.
+model Bond {
+  id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  isinRef      String  @unique @map("isin_ref")
+  projectSlug  String? @map("project_slug")
+  /// The issuer is an Endeleo user, not an auth provider's id.
+  issuerId     String  @map("issuer_id") @db.Uuid
+  spvReference String  @map("spv_reference")
+  title        String
+
+  currency               Currency        @default(NGN)
+  totalSizeMinor         BigInt          @map("total_size_minor")
+  minimumInvestmentMinor BigInt          @map("minimum_investment_minor")
+  raisedMinor            BigInt          @default(0) @map("raised_minor")
+  tenorMonths            Int             @map("tenor_months")
+  couponRateBps          Int             @map("coupon_rate_bps")
+  couponFrequency        CouponFrequency @default(quarterly) @map("coupon_frequency")
+  allocationRule         AllocationRule  @default(fcfs) @map("allocation_rule")
+
+  /// Basis points. 2000 = no investor may hold more than 20% of the bond.
+  concentrationLimitBps Int      @default(2000) @map("concentration_limit_bps")
+  kycTierRequired       Int      @default(1) @map("kyc_tier_required") @db.SmallInt
+  geoBlock              String[] @default([]) @map("geo_block")
+
+  subscriptionOpenAt  DateTime  @map("subscription_open_at") @db.Timestamptz(6)
+  subscriptionCloseAt DateTime  @map("subscription_close_at") @db.Timestamptz(6)
+  /// Both set at activation, derived from tenor when not given at issuance.
+  issueDate           DateTime? @map("issue_date") @db.Date
+  maturityDate        DateTime? @map("maturity_date") @db.Date
+
+  status    BondStatus @default(draft)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  issuer           User                @relation("BondIssuer", fields: [issuerId], references: [id], onDelete: Restrict)
+  subscriptions    Subscription[]
+  holdings         Holding[]
+  couponSchedules  CouponSchedule[]
+  couponPayments   CouponPayment[]
+  taxRecords       TaxRecord[]
+  escrowAccounts   EscrowAccount[]
+  redemptionEvents RedemptionEvent[]
+  principalReturns PrincipalReturn[]
+  listings         MarketListing[]
+  trades           MarketTrade[]
+  auditEntries     BondAuditEntry[]
+
+  @@index([status])
+  @@map("bonds")
+}
+
+/// An intent to invest, before units are handed over.
+model Subscription {
+  id                  String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId              String             @map("bond_id") @db.Uuid
+  userId              String             @map("user_id") @db.Uuid
+  amountMinor         BigInt             @map("amount_minor")
+  status              SubscriptionStatus @default(pending)
+  /// 48-hour cooling-off window.
+  coolingOffExpiresAt DateTime           @map("cooling_off_expires_at") @db.Timestamptz(6)
+  escrowReference     String?            @map("escrow_reference")
+  allocatedAt         DateTime?          @map("allocated_at") @db.Timestamptz(6)
+  cancelledAt         DateTime?          @map("cancelled_at") @db.Timestamptz(6)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([bondId, status])
+  @@index([userId])
+  @@map("bond_subscriptions")
+}
+
+/// The register: who owns what. The system of record.
+model Holding {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId          String   @map("bond_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  unitsMinor      BigInt   @map("units_minor")
+  certificateHash String?  @map("certificate_hash")
+  firstSettledAt  DateTime @default(now()) @map("first_settled_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([bondId, userId])
+  @@index([userId])
+  @@map("bond_holdings")
+}
+
+/// When each coupon period runs and when it is due.
+model CouponSchedule {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId           String    @map("bond_id") @db.Uuid
+  periodIndex      Int       @map("period_index")
+  periodStart      DateTime  @map("period_start") @db.Date
+  periodEnd        DateTime  @map("period_end") @db.Date
+  scheduledPayDate DateTime  @map("scheduled_pay_date") @db.Date
+  processedAt      DateTime? @map("processed_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  bond     Bond            @relation(fields: [bondId], references: [id], onDelete: Cascade)
+  payments CouponPayment[]
+
+  @@unique([bondId, periodIndex])
+  @@index([scheduledPayDate])
+  @@map("bond_coupon_schedules")
+}
+
+/// One holder's coupon for one period.
+model CouponPayment {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scheduleId String @map("schedule_id") @db.Uuid
+  bondId     String @map("bond_id") @db.Uuid
+  userId     String @map("user_id") @db.Uuid
+
+  /// Units × days held, the weight behind the split. Kept so a holder can be shown
+  /// exactly why they were paid what they were paid.
+  unitDays            BigInt @map("unit_days")
+  daysHeld            Int    @map("days_held")
+  closingUnitsMinor   BigInt @map("closing_units_minor")
+  grossMinor          BigInt @map("gross_minor")
+  whtMinor            BigInt @map("wht_minor")
+  netMinor            BigInt @map("net_minor")
+
+  status      PaymentStatus @default(pending)
+  /// Counts attempts, and doubles as an optimistic-concurrency version so two
+  /// workers cannot pay the same coupon twice.
+  attempts    Int           @default(0)
+  lastError   String?       @map("last_error")
+  providerRef String?       @map("provider_ref")
+  paidAt      DateTime?     @map("paid_at") @db.Timestamptz(6)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  schedule CouponSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  bond     Bond           @relation(fields: [bondId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  tax      TaxRecord?
+
+  @@unique([scheduleId, userId])
+  @@index([status])
+  @@index([userId])
+  @@map("bond_coupon_payments")
+}
+
+/// Withholding tax withheld, for FIRS filing.
+model TaxRecord {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId          String   @map("bond_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  couponPaymentId String?  @unique @map("coupon_payment_id") @db.Uuid
+  taxYear         Int      @map("tax_year")
+  grossMinor      BigInt   @map("gross_minor")
+  whtMinor        BigInt   @map("wht_minor")
+  whtRateBps      Int      @default(1000) @map("wht_rate_bps")
+  currency        Currency
+  recordedAt      DateTime @default(now()) @map("recorded_at") @db.Timestamptz(6)
+
+  bond          Bond           @relation(fields: [bondId], references: [id], onDelete: Restrict)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  couponPayment CouponPayment? @relation(fields: [couponPaymentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, taxYear])
+  @@map("bond_tax_records")
+}
+
+/// Trustee-held funds, per bond and purpose.
+model EscrowAccount {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId         String        @map("bond_id") @db.Uuid
+  purpose        EscrowPurpose
+  balanceMinor   BigInt        @default(0) @map("balance_minor")
+  currency       Currency
+  lastVerifiedAt DateTime?     @map("last_verified_at") @db.Timestamptz(6)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Restrict)
+
+  @@unique([bondId, purpose])
+  @@map("bond_escrow_accounts")
+}
+
+/// The countdown to maturity, and the default trigger at T-30.
+model RedemptionEvent {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId       String          @map("bond_id") @db.Uuid
+  stage        RedemptionStage
+  scheduledFor DateTime        @map("scheduled_for") @db.Date
+  executedAt   DateTime?       @map("executed_at") @db.Timestamptz(6)
+  metadata     Json            @default("{}")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Restrict)
+
+  @@unique([bondId, stage])
+  @@index([scheduledFor])
+  @@map("bond_redemption_events")
+}
+
+model PrincipalReturn {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId      String        @map("bond_id") @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  amountMinor BigInt        @map("amount_minor")
+  status      PaymentStatus @default(pending)
+  attempts    Int           @default(0)
+  lastError   String?       @map("last_error")
+  providerRef String?       @map("provider_ref")
+  paidAt      DateTime?     @map("paid_at") @db.Timestamptz(6)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([bondId, userId])
+  @@map("bond_principal_returns")
+}
+
+/// Secondary market: a holder offering units for sale.
+model MarketListing {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId      String        @map("bond_id") @db.Uuid
+  sellerId    String        @map("seller_id") @db.Uuid
+  unitsMinor  BigInt        @map("units_minor")
+  /// Price as basis points of par. 10000 = at par.
+  askPriceBps Int           @map("ask_price_bps")
+  status      ListingStatus @default(active)
+  expiresAt   DateTime?     @map("expires_at") @db.Timestamptz(6)
+  filledAt    DateTime?     @map("filled_at") @db.Timestamptz(6)
+  cancelledAt DateTime?     @map("cancelled_at") @db.Timestamptz(6)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bond   Bond          @relation(fields: [bondId], references: [id], onDelete: Restrict)
+  seller User          @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  trades MarketTrade[]
+
+  @@index([bondId, status])
+  @@index([sellerId])
+  @@map("bond_market_listings")
+}
+
+model MarketTrade {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  listingId  String   @map("listing_id") @db.Uuid
+  bondId     String   @map("bond_id") @db.Uuid
+  sellerId   String   @map("seller_id") @db.Uuid
+  buyerId    String   @map("buyer_id") @db.Uuid
+  unitsMinor BigInt   @map("units_minor")
+  priceMinor BigInt   @map("price_minor")
+  feeMinor   BigInt   @map("fee_minor")
+  tradeDate  DateTime @default(dbgenerated("CURRENT_DATE")) @map("trade_date") @db.Date
+  executedAt DateTime @default(now()) @map("executed_at") @db.Timestamptz(6)
+
+  listing MarketListing @relation(fields: [listingId], references: [id], onDelete: Restrict)
+  bond    Bond          @relation(fields: [bondId], references: [id], onDelete: Restrict)
+  seller  User          @relation("TradeSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  buyer   User          @relation("TradeBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+
+  @@index([bondId, executedAt])
+  @@map("bond_market_trades")
+}
+
+/// Append-only record of everything that happened. A trigger blocks UPDATE and
+/// DELETE outright — the previous engine relied on withholding row-level security
+/// policies, which only holds while nobody connects as a privileged role.
+model BondAuditEntry {
+  id        BigInt   @id @default(autoincrement())
+  bondId    String?  @map("bond_id") @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  event     String
+  payload   Json     @default("{}")
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
+
+  bond Bond? @relation(fields: [bondId], references: [id], onDelete: SetNull)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([bondId, createdAt])
+  @@map("bond_audit_log")
 }
