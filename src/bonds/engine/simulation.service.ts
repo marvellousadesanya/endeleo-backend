@@ -60,9 +60,18 @@ export class SimulationService {
   /** One full engine pass at a pretend date, in the same order as the real tick. */
   async runEngineAt(asOf: string): Promise<EngineStep> {
     this.assertEnabled();
+    // Order is load-bearing. Activation creates the schedules the rest read; the
+    // default check must precede the coupon pass so a defaulting bond pays nothing
+    // today; the maturity payout must follow it so the final coupon is not skipped.
     const transitions = await this.activation.runTransitions({ asOf });
+    const checks = await this.redemption.runChecks(asOf);
     const coupons = await this.coupons.run(asOf);
-    const redemption = await this.redemption.run(asOf);
+    const maturity = await this.redemption.runMaturity(asOf);
+    const redemption = {
+      processed: checks.processed + maturity.processed,
+      defaulted: [...checks.defaulted, ...maturity.defaulted],
+      principalPaid: checks.principalPaid + maturity.principalPaid,
+    };
 
     return {
       asOf,

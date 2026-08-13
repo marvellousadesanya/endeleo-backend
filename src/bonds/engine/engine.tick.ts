@@ -28,8 +28,16 @@ export class EngineTick {
       // and redemption rows the next two passes read. Running them together would leave
       // a freshly activated bond unprocessed for an hour.
       const transitions = await this.activation.runTransitions();
+      // The default check runs before coupons so a bond found to be in default today
+      // does not disburse today's interest; the maturity payout runs after, so the
+      // final coupon is paid before the bond closes.
+      const checks = await this.redemption.runChecks();
       const coupons = await this.coupons.run();
-      const redemption = await this.redemption.run();
+      const maturity = await this.redemption.runMaturity();
+      const redemption = {
+        processed: checks.processed + maturity.processed,
+        defaulted: [...checks.defaulted, ...maturity.defaulted],
+      };
 
       const touched =
         transitions.activated.length + coupons.paid + coupons.failed + redemption.processed;

@@ -8,6 +8,7 @@ import { PrismaService } from "@/database/prisma.service";
 import { AuditService } from "@/audit/audit.service";
 import { PaymentAdapter } from "../adapters/payment.adapter";
 import { NotificationAdapter } from "../adapters/notification.adapter";
+import type { RedemptionStage } from "@prisma/client";
 
 export interface RedemptionRunSummary {
   processed: number;
@@ -27,12 +28,37 @@ export class RedemptionRunnerService {
     private readonly notifications: NotificationAdapter,
   ) {}
 
-  async run(asOf?: string): Promise<RedemptionRunSummary> {
+  /**
+   * Notices and the default check. Runs *before* the coupon pass.
+   *
+   * Ordering matters: the T-30 check is what determines a bond has failed. If coupons
+   * ran first, a bond discovered to be in default today would already have disbursed
+   * today's interest — money out of the door on the very day we established it should
+   * not be.
+   */
+  runChecks(asOf?: string): Promise<RedemptionRunSummary> {
+    return this.run(asOf, ["t_minus_90", "t_minus_30", "t_minus_7"]);
+  }
+
+  /**
+   * The maturity payout. Runs *after* the coupon pass, for the mirror-image reason:
+   * the final coupon falls due on the maturity date, and marking the bond matured first
+   * would make the coupon pass skip it.
+   */
+  runMaturity(asOf?: string): Promise<RedemptionRunSummary> {
+    return this.run(asOf, ["maturity"]);
+  }
+
+  async run(asOf?: string, stages?: RedemptionStage[]): Promise<RedemptionRunSummary> {
     const today = asOf ? new Date(`${asOf}T00:00:00Z`) : new Date();
     const summary: RedemptionRunSummary = { processed: 0, defaulted: [], principalPaid: 0, failures: [] };
 
     const due = await this.prisma.redemptionEvent.findMany({
-      where: { scheduledFor: { lte: today }, executedAt: null },
+      where: {
+        scheduledFor: { lte: today },
+        executedAt: null,
+        ...(stages ? { stage: { in: stages } } : {}),
+      },
       include: { bond: true },
       orderBy: { scheduledFor: "asc" },
     });
@@ -100,7 +126,19 @@ export class RedemptionRunnerService {
       where: { id: bondId, status: "active" },
       data: { status: "defaulted" },
     });
-    await this.audit.record({ bondId, event: "default_triggered", payload: { reason: "principal_escrow_unfunded_at_t30" } });
+    // Freeze interest still owed. `escalated` is the right terminal state: these need a
+    // person — trustee, legal, recovery — not another disbursement attempt. It also does
+    // not block the coupon schedule from closing.
+    const { count: suspended } = await this.prisma.couponPayment.updateMany({
+      where: { bondId, status: { in: ["pending", "retry"] } },
+      data: { status: "escalated", lastError: "suspended: bond defaulted" },
+    });
+
+    await this.audit.record({
+      bondId,
+      event: "default_triggered",
+      payload: { reason: "principal_escrow_unfunded_at_t30", couponsSuspended: suspended },
+    });
 
     const holders = await this.prisma.holding.findMany({
       where: { bondId, unitsMinor: { gt: 0n } },

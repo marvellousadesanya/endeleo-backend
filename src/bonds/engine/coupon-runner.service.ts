@@ -85,7 +85,10 @@ export class CouponRunnerService {
   /** Pass 1 — create the payment rows owed for schedules that have come due. */
   private async materialise(today: Date): Promise<number> {
     const due = await this.prisma.couponSchedule.findMany({
-      where: { scheduledPayDate: { lte: today }, processedAt: null },
+      // Only a live bond accrues payable interest. A defaulted bond stops servicing
+      // its coupons: the outstanding amounts become part of the recovery, not a
+      // scheduled payment. A matured or closed bond has nothing left to accrue.
+      where: { scheduledPayDate: { lte: today }, processedAt: null, bond: { status: "active" } },
       include: { bond: true },
       take: 50,
     });
@@ -140,7 +143,14 @@ export class CouponRunnerService {
   /** Pass 2 — attempt every outstanding payment, including previously failed ones. */
   private async attemptOutstanding() {
     const outstanding = await this.prisma.couponPayment.findMany({
-      where: { status: { in: ["pending", "retry"] }, attempts: { lt: MAX_ATTEMPTS } },
+      // Excludes defaulted bonds. Rows raised before the default are suspended by the
+      // redemption runner, but this is the belt to that braces: no path disburses
+      // interest on a bond that has failed to fund its principal.
+      where: {
+        status: { in: ["pending", "retry"] },
+        attempts: { lt: MAX_ATTEMPTS },
+        bond: { status: { not: "defaulted" } },
+      },
       include: { bond: true, schedule: { select: { periodIndex: true, periodEnd: true } } },
       take: 500,
     });
