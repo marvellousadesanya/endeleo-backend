@@ -24,6 +24,10 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
+  // Engine test controls. Both must stay unset in production.
+  BOND_ENGINE_ALLOW_SIMULATION: z.enum(["true", "false"]).optional(),
+  BOND_ENGINE_MOCK_DISBURSE: z.enum(["ok", "fail", "throw"]).optional(),
+
   CORS_ORIGINS: z
     .string()
     .default("")

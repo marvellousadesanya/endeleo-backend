@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
+import { AuditModule } from "@/audit/audit.module";
 import { AuthModule } from "@/auth/auth.module";
+import { BondsModule } from "@/bonds/bonds.module";
 import { validateEnv } from "@/config/env";
 import { DatabaseModule } from "@/database/database.module";
 import { HealthModule } from "@/health/health.module";
@@ -20,7 +22,9 @@ import { UsersModule } from "@/users/users.module";
     DatabaseModule,
     SchedulerModule,
     UsersModule,
+    AuditModule,
     AuthModule,
+    BondsModule,
     HealthModule,
   ],
 })
