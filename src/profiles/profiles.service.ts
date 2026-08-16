@@ -5,6 +5,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import type { Prisma, Profile } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
+import { StorageService } from "@/storage/storage.service";
 import type { SubmitKycDto, UpdateProfileDto } from "./dto/profiles.dto";
 
 /** Document keys each investor type must supply before KYC can be accepted. */
@@ -17,7 +18,25 @@ const INSTITUTIONAL_DOC_KEYS = [
 
 @Injectable()
 export class ProfilesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
+
+  /**
+   * Stores one KYC document and returns its path, which the caller then submits with
+   * the rest of the form. Scoped to the caller's own prefix so the ownership check in
+   * submitKyc below can never be satisfied with someone else's file.
+   */
+  async uploadKycDocument(userId: string, file: Express.Multer.File) {
+    const stored = await this.storage.put(
+      `${userId}`,
+      file.originalname,
+      file.mimetype || "application/octet-stream",
+      file.buffer,
+    );
+    return { path: stored.path, fileName: stored.fileName, sizeBytes: stored.sizeBytes };
+  }
 
   /**
    * The profile as the UI consumes it: profile columns plus the identity fields User

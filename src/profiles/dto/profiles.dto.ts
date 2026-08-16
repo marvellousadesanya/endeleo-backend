@@ -9,6 +9,10 @@ export class UpdateProfileDto {
   @IsOptional() @IsString() @Length(2, 2) country?: string;
   @IsOptional() @IsString() @Length(1, 240) address?: string;
   @IsOptional() @IsString() @Length(1, 512) avatarUrl?: string;
+
+  /** Set once the sponsor picks a profile on the project-submission form. */
+  @IsOptional() @IsEnum(["individual", "government", "corporate"])
+  submitterType?: "individual" | "government" | "corporate";
 }
 
 /**

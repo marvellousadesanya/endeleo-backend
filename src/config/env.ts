@@ -28,6 +28,13 @@ const envSchema = z.object({
   BOND_ENGINE_ALLOW_SIMULATION: z.enum(["true", "false"]).optional(),
   BOND_ENGINE_MOCK_DISBURSE: z.enum(["ok", "fail", "throw"]).optional(),
 
+  // Local-disk file storage. Files are written under this root; see storage.service.ts.
+  // Swap for object storage before running more than one instance -- see README.
+  STORAGE_ROOT: z.string().default("./storage"),
+  // Signs short-lived download URLs. Distinct from the JWT secrets on purpose: a leaked
+  // download link must never be usable as a session token.
+  STORAGE_URL_SECRET: z.string().min(32).optional(),
+
   CORS_ORIGINS: z
     .string()
     .default("")
