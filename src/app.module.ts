@@ -7,6 +7,9 @@ import { BondsModule } from "@/bonds/bonds.module";
 import { validateEnv } from "@/config/env";
 import { DatabaseModule } from "@/database/database.module";
 import { HealthModule } from "@/health/health.module";
+import { ProfilesModule } from "@/profiles/profiles.module";
+import { WalletModule } from "@/wallet/wallet.module";
+import { ReferralsModule } from "@/referrals/referrals.module";
 import { SchedulerModule } from "@/scheduler/scheduler.module";
 import { UsersModule } from "@/users/users.module";
 
@@ -25,6 +28,9 @@ import { UsersModule } from "@/users/users.module";
     AuditModule,
     AuthModule,
     BondsModule,
+    ProfilesModule,
+    WalletModule,
+    ReferralsModule,
     HealthModule,
   ],
 })

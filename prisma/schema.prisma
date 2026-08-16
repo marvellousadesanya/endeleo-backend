@@ -31,6 +31,23 @@ enum Role {
   @@map("user_role")
 }
 
+enum SubmitterType {
+  individual
+  government
+  corporate
+
+  @@map("submitter_type")
+}
+
+enum KycStatus {
+  none
+  pending
+  verified
+  rejected
+
+  @@map("kyc_status")
+}
+
 /// Endeleo's own identity. This id — not an auth provider's — is the domain key that
 /// holdings, subscriptions and audit entries will reference.
 model User {
@@ -51,16 +68,24 @@ model User {
   refreshTokens RefreshToken[]
   exchangeCodes OAuthExchangeCode[]
 
-  issuedBonds      Bond[]            @relation("BondIssuer")
+  issuedBonds      Bond[]                @relation("BondIssuer")
   subscriptions    Subscription[]
   holdings         Holding[]
   couponPayments   CouponPayment[]
   taxRecords       TaxRecord[]
   principalReturns PrincipalReturn[]
   listings         MarketListing[]
-  soldTrades       MarketTrade[]     @relation("TradeSeller")
-  boughtTrades     MarketTrade[]     @relation("TradeBuyer")
+  soldTrades       MarketTrade[]         @relation("TradeSeller")
+  boughtTrades     MarketTrade[]         @relation("TradeBuyer")
   auditEntries     BondAuditEntry[]
+  profile          Profile?
+  wallet           Wallet?
+  walletTxs        WalletTransaction[]
+  notifications    Notification[]
+  investments      Investment[]
+  payouts          Payout[]
+  referralsMade    ReferralAttribution[] @relation("ReferralReferrer")
+  referredAs       ReferralAttribution?  @relation("ReferralReferee")
 
   @@map("users")
 }
@@ -131,9 +156,9 @@ model RefreshToken {
 /// hands out pooled connections, so the lock and the unlock could land on different
 /// connections. A row we control has no such ambiguity.
 model JobLock {
-  name        String   @id
-  lockedUntil DateTime @map("locked_until") @db.Timestamptz(6)
-  lockedBy    String?  @map("locked_by")
+  name        String    @id
+  lockedUntil DateTime  @map("locked_until") @db.Timestamptz(6)
+  lockedBy    String?   @map("locked_by")
   lastRunAt   DateTime? @map("last_run_at") @db.Timestamptz(6)
 
   @@map("job_locks")
@@ -292,7 +317,7 @@ model Bond {
   createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  issuer           User                @relation("BondIssuer", fields: [issuerId], references: [id], onDelete: Restrict)
+  issuer           User              @relation("BondIssuer", fields: [issuerId], references: [id], onDelete: Restrict)
   subscriptions    Subscription[]
   holdings         Holding[]
   couponSchedules  CouponSchedule[]
@@ -378,12 +403,12 @@ model CouponPayment {
 
   /// Units × days held, the weight behind the split. Kept so a holder can be shown
   /// exactly why they were paid what they were paid.
-  unitDays            BigInt @map("unit_days")
-  daysHeld            Int    @map("days_held")
-  closingUnitsMinor   BigInt @map("closing_units_minor")
-  grossMinor          BigInt @map("gross_minor")
-  whtMinor            BigInt @map("wht_minor")
-  netMinor            BigInt @map("net_minor")
+  unitDays          BigInt @map("unit_days")
+  daysHeld          Int    @map("days_held")
+  closingUnitsMinor BigInt @map("closing_units_minor")
+  grossMinor        BigInt @map("gross_minor")
+  whtMinor          BigInt @map("wht_minor")
+  netMinor          BigInt @map("net_minor")
 
   status      PaymentStatus @default(pending)
   /// Counts attempts, and doubles as an optimistic-concurrency version so two
@@ -541,4 +566,175 @@ model BondAuditEntry {
 
   @@index([bondId, createdAt])
   @@map("bond_audit_log")
+}
+
+/// Everything about a person that is not their identity or their credentials.
+///
+/// Ported from the Supabase `profiles` table, with two deliberate changes: `email` and
+/// `full_name` are NOT duplicated here, because User already owns them and two copies
+/// of the same fact drift. The service merges them in on read.
+model Profile {
+  /// Shares the User's primary key — one profile per user, always.
+  userId String @id @map("user_id") @db.Uuid
+
+  avatarUrl    String?   @map("avatar_url")
+  phone        String?
+  country      String?
+  address      String?
+  dateOfBirth  DateTime? @map("date_of_birth") @db.Date
+  currencyPref String    @default("NGN") @map("currency_pref")
+
+  /// "retail" | "institutional". Free text in Supabase; kept as text to avoid a lossy port.
+  investorType  String?        @map("investor_type")
+  submitterType SubmitterType? @map("submitter_type")
+
+  companyName        String? @map("company_name")
+  contactTitle       String? @map("contact_title")
+  registrationNumber String? @map("registration_number")
+  taxId              String? @map("tax_id")
+  nationalId         String? @map("national_id")
+
+  kycStatus      KycStatus @default(none) @map("kyc_status")
+  /// Map of document key → storage path. Paths only; the files live elsewhere.
+  kycDocuments   Json      @default("{}") @map("kyc_documents")
+  kycSubmittedAt DateTime? @map("kyc_submitted_at") @db.Timestamptz(6)
+
+  referralCode String? @unique @map("referral_code")
+  referredBy   String? @map("referred_by") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WALLET, INVESTMENTS & MESSAGING
+//
+// Ported from Supabase. One deliberate correction throughout: money was stored
+// there as `numeric`/float dollars (`balance_usd`, `amount_usd`) and added with
+// JavaScript arithmetic. Here it follows the same rule as the bond engine —
+// integer minor units in BIGINT, never a float — so a balance cannot drift by a
+// fraction of a cent per operation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum WalletTxKind {
+  deposit
+  withdrawal
+  investment
+  payout
+  refund
+  fee
+
+  @@map("wallet_tx_kind")
+}
+
+enum WalletTxStatus {
+  pending
+  completed
+  failed
+  cancelled
+
+  @@map("wallet_tx_status")
+}
+
+model Wallet {
+  userId       String   @id @map("user_id") @db.Uuid
+  /// Cents. See the note above — never a float.
+  balanceMinor BigInt   @default(0) @map("balance_minor")
+  currency     String   @default("USD")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String         @map("user_id") @db.Uuid
+  kind        WalletTxKind
+  status      WalletTxStatus @default(completed)
+  amountMinor BigInt         @map("amount_minor")
+  method      String?
+  reference   String?
+  note        String?
+  completedAt DateTime?      @map("completed_at") @db.Timestamptz(6)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("wallet_transactions")
+}
+
+model Notification {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  title     String
+  body      String?
+  href      String?
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+/// Legacy pre-bond-engine product. Kept as its own model rather than folded into
+/// Subscription because the two have different lifecycles and the UI still lists them.
+model Investment {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  projectSlug String   @map("project_slug")
+  amountMinor BigInt   @map("amount_minor")
+  /// Basis points, not a float percentage — 1250 = 12.5%.
+  ratePctBps  Int      @map("rate_pct_bps")
+  tenorMonths Int      @map("tenor_months")
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payouts Payout[]
+
+  @@index([userId, createdAt])
+  @@map("investments")
+}
+
+model Payout {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  investmentId String   @map("investment_id") @db.Uuid
+  kind         String
+  amountMinor  BigInt   @map("amount_minor")
+  paidAt       DateTime @map("paid_at") @db.Timestamptz(6)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  investment Investment @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+
+  @@index([userId, paidAt])
+  @@map("payouts")
+}
+
+model ReferralAttribution {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code       String
+  referrerId String   @map("referrer_id") @db.Uuid
+  /// One attribution per referee, ever — the unique constraint is the anti-abuse rule.
+  refereeId  String   @unique @map("referee_id") @db.Uuid
+  status     String   @default("pending")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  referrer User @relation("ReferralReferrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referee  User @relation("ReferralReferee", fields: [refereeId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId])
+  @@map("referral_attributions")
 }
