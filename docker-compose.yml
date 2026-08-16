@@ -1,6 +1,11 @@
 # Local Postgres for development. Plain Postgres — no Supabase, no extra services.
 # The bond engine relies on gen_random_uuid(), which ships with Postgres 13+ (pgcrypto
 # is created below anyway so older SQL that calls it still works).
+# Pinned so the compose project name never follows the folder name. Without this,
+# renaming the directory would make Compose look for a differently-prefixed volume,
+# create an empty one, and the local database would appear wiped.
+name: backend
+
 services:
   postgres:
     image: postgres:17-alpine
