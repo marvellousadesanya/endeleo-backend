@@ -33,6 +33,14 @@ export class AuthController {
     await this.auth.logout(dto.refreshToken);
   }
 
+  /** Revokes every refresh token for the caller — "sign out of all devices". */
+  @Post("logout-all")
+  @HttpCode(204)
+  @UseGuards(JwtAuthGuard)
+  async logoutAll(@CurrentUser() user: AuthUser) {
+    await this.auth.revokeAllForUser(user.id);
+  }
+
   @Get("me")
   @UseGuards(JwtAuthGuard)
   me(@CurrentUser() user: AuthUser) {

@@ -45,6 +45,14 @@ export class OAuthController {
 
   @Get("google")
   start(@Res() res: Response) {
+    // Reached by a full-page navigation from the sign-in button, so a raw 503 JSON body
+    // would replace the app with an error document. Send the user back to the sign-in
+    // screen instead and let it show the message in context.
+    if (!this.google.isConfigured) {
+      const frontend = this.config.getOrThrow<string>("FRONTEND_URL");
+      return res.redirect(`${frontend}/auth?error=${encodeURIComponent("google_not_configured")}`);
+    }
+
     const state = randomBytes(16).toString("base64url");
     const { verifier, challenge } = pkcePair();
 

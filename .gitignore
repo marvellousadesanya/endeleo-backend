@@ -4,3 +4,6 @@ dist
 .env.local
 *.log
 .DS_Store
+
+# Local-disk uploads (STORAGE_ROOT). Never committed.
+storage/

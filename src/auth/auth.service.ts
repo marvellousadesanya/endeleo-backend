@@ -13,10 +13,18 @@ import { hash as argonHash, verify as argonVerify } from "@node-rs/argon2";
 import { createHash, randomBytes } from "node:crypto";
 import { PrismaService } from "@/database/prisma.service";
 import { UsersService, type UserWithRoles } from "@/users/users.service";
+import { MfaService } from "./mfa/mfa.service";
 
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
+}
+
+/** Returned by login when a second factor stands between the password and a session. */
+export interface MfaRequired {
+  mfaRequired: true;
+  challengeId: string;
+  expiresAt: string;
 }
 
 export interface AuthResult extends TokenPair {
@@ -49,6 +57,7 @@ export class AuthService {
     private readonly users: UsersService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly mfa: MfaService,
   ) {}
 
   async register(input: { email: string; password: string; fullName?: string }): Promise<AuthResult> {
@@ -64,7 +73,15 @@ export class AuthService {
     return this.issue(user);
   }
 
-  async login(input: { email: string; password: string }, userAgent?: string): Promise<AuthResult> {
+  /**
+   * Returns a token pair, or — when the account has a verified second factor — an
+   * MfaChallenge instead. The challenge proves only that the password was right; the
+   * caller must redeem it with a code at /auth/mfa/challenge to get tokens.
+   */
+  async login(
+    input: { email: string; password: string },
+    userAgent?: string,
+  ): Promise<AuthResult | MfaRequired> {
     const user = await this.users.findByEmail(input.email);
 
     // Verify against a dummy hash when the user is unknown, so the response time does
@@ -76,6 +93,11 @@ export class AuthService {
 
     if (!user || !ok) throw new UnauthorizedException("Invalid email or password");
     if (user.status !== "active") throw new UnauthorizedException("Account is not active");
+
+    if (await this.mfa.hasVerifiedFactor(user.id)) {
+      const { challengeId, expiresAt } = await this.mfa.createChallenge(user.id, userAgent);
+      return { mfaRequired: true, challengeId, expiresAt: expiresAt.toISOString() };
+    }
 
     // findByEmail already includes roles.
     return this.issue(user, userAgent);
@@ -131,7 +153,7 @@ export class AuthService {
     return this.issue(user, userAgent);
   }
 
-  private async revokeAllForUser(userId: string): Promise<void> {
+  async revokeAllForUser(userId: string): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },

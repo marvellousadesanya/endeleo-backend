@@ -9,11 +9,13 @@ import { RefreshTokenCleanup } from "./refresh-token.cleanup";
 import { GoogleProvider } from "./oauth/google.provider";
 import { OAuthController } from "./oauth/oauth.controller";
 import { OAuthService } from "./oauth/oauth.service";
+import { MfaController } from "./mfa/mfa.controller";
+import { MfaService } from "./mfa/mfa.service";
 
 @Module({
   imports: [UsersModule, PassportModule, JwtModule.register({})],
-  controllers: [AuthController, OAuthController],
-  providers: [AuthService, JwtStrategy, RefreshTokenCleanup, GoogleProvider, OAuthService],
-  exports: [AuthService],
+  controllers: [AuthController, OAuthController, MfaController],
+  providers: [AuthService, JwtStrategy, RefreshTokenCleanup, GoogleProvider, OAuthService, MfaService],
+  exports: [AuthService, MfaService],
 })
 export class AuthModule {}

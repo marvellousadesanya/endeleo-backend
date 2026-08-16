@@ -91,6 +91,8 @@ model User {
   dataRoomSigs     DataRoomSignature[]
   submissions      ProjectSubmission[]
   applications     InvestorApplication[]
+  mfaFactors       MfaFactor[]
+  mfaChallenges    MfaChallenge[]
 
   @@map("users")
 }
@@ -898,4 +900,53 @@ model InvestorApplication {
 
   @@index([status, createdAt])
   @@map("investor_applications")
+}
+
+enum MfaFactorStatus {
+  /// Created but not yet proved — the user has the secret, not a verified code.
+  pending
+  verified
+
+  @@map("mfa_factor_status")
+}
+
+/// Time-based one-time password factors (RFC 6238).
+///
+/// The secret is the whole credential: anyone holding it can generate valid codes
+/// forever. It is stored here because TOTP verification needs the plaintext, which is
+/// exactly why it should move behind application-level encryption or a KMS before this
+/// carries real accounts.
+model MfaFactor {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String          @map("user_id") @db.Uuid
+  friendlyName String?         @map("friendly_name")
+  secret       String
+  status       MfaFactorStatus @default(pending)
+  verifiedAt   DateTime?       @map("verified_at") @db.Timestamptz(6)
+  lastUsedStep BigInt?         @map("last_used_step")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("mfa_factors")
+}
+
+/// A login that passed the password check and is waiting on a second factor.
+///
+/// Short-lived and single-use. Holding one proves the password was correct but grants
+/// nothing on its own.
+model MfaChallenge {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  attempts   Int       @default(0)
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("mfa_challenges")
 }
