@@ -82,8 +82,6 @@ model User {
   wallet           Wallet?
   walletTxs        WalletTransaction[]
   notifications    Notification[]
-  investments      Investment[]
-  payouts          Payout[]
   referralsMade    ReferralAttribution[] @relation("ReferralReferrer")
   referredAs       ReferralAttribution?  @relation("ReferralReferee")
   posts            Post[]
@@ -692,43 +690,6 @@ model Notification {
 
   @@index([userId, createdAt])
   @@map("notifications")
-}
-
-/// Legacy pre-bond-engine product. Kept as its own model rather than folded into
-/// Subscription because the two have different lifecycles and the UI still lists them.
-model Investment {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId      String   @map("user_id") @db.Uuid
-  projectSlug String   @map("project_slug")
-  amountMinor BigInt   @map("amount_minor")
-  /// Basis points, not a float percentage — 1250 = 12.5%.
-  ratePctBps  Int      @map("rate_pct_bps")
-  tenorMonths Int      @map("tenor_months")
-  status      String   @default("active")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  payouts Payout[]
-
-  @@index([userId, createdAt])
-  @@map("investments")
-}
-
-model Payout {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId       String   @map("user_id") @db.Uuid
-  investmentId String   @map("investment_id") @db.Uuid
-  kind         String
-  amountMinor  BigInt   @map("amount_minor")
-  paidAt       DateTime @map("paid_at") @db.Timestamptz(6)
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  investment Investment @relation(fields: [investmentId], references: [id], onDelete: Cascade)
-
-  @@index([userId, paidAt])
-  @@map("payouts")
 }
 
 model ReferralAttribution {

@@ -136,7 +136,7 @@ export class WalletService {
     return { ok: true, updated: result.count };
   }
 
-  /** Used by other services (investments, payouts) to raise a message. */
+  /** Used by other services (subscriptions, coupons) to raise a message. */
   notify(tx: Prisma.TransactionClient, userId: string, title: string, body: string, href?: string) {
     return tx.notification.create({ data: { userId, title, body, href } });
   }

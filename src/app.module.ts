@@ -13,7 +13,6 @@ import { ReferralsModule } from "@/referrals/referrals.module";
 import { AdminModule } from "@/admin/admin.module";
 import { ContentModule } from "@/content/content.module";
 import { DataRoomModule } from "@/data-room/data-room.module";
-import { InvestmentsModule } from "@/investments/investments.module";
 import { StorageModule } from "@/storage/storage.module";
 import { SubmissionsModule } from "@/submissions/submissions.module";
 import { SchedulerModule } from "@/scheduler/scheduler.module";
@@ -38,7 +37,6 @@ import { UsersModule } from "@/users/users.module";
     WalletModule,
     ReferralsModule,
     StorageModule,
-    InvestmentsModule,
     AdminModule,
     DataRoomModule,
     ContentModule,
