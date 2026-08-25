@@ -104,7 +104,15 @@ export class BondsService {
   holdingsFor(userId: string) {
     return this.prisma.holding.findMany({
       where: { userId, unitsMinor: { gt: 0n } },
-      include: { bond: { select: { id: true, title: true, isinRef: true, currency: true, status: true, couponRateBps: true, maturityDate: true } } },
+      include: {
+        bond: {
+          select: {
+            id: true, title: true, isinRef: true, currency: true, status: true,
+            couponRateBps: true, couponFrequency: true, maturityDate: true, issueDate: true,
+            tenorMonths: true, projectSlug: true, spvReference: true,
+          },
+        },
+      },
       orderBy: { updatedAt: "desc" },
     });
   }

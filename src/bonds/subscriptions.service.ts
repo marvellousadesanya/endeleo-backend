@@ -124,7 +124,15 @@ export class SubscriptionsService {
   mine(userId: string) {
     return this.prisma.subscription.findMany({
       where: { userId },
-      include: { bond: { select: { id: true, title: true, isinRef: true, currency: true, status: true } } },
+      include: {
+        bond: {
+          select: {
+            id: true, title: true, isinRef: true, currency: true, status: true,
+            couponRateBps: true, couponFrequency: true, maturityDate: true,
+            tenorMonths: true, projectSlug: true, spvReference: true,
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
   }
