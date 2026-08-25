@@ -1,0 +1,11 @@
+-- allocate_subscription() could never insert a holding.
+--
+-- bond_holdings.updated_at is NOT NULL, and Prisma's @updatedAt is applied by the
+-- client, not the database — so the port dropped the DEFAULT now() the Supabase schema
+-- had. Every other write goes through Prisma and was fine, but allocation happens in a
+-- PL/pgSQL procedure that bypasses Prisma entirely, so its INSERT supplied no value and
+-- failed the not-null constraint. Allocation was broken for every subscription.
+--
+-- bond_audit_log and bond_market_trades are the only other procedure-inserted tables,
+-- and both already carry defaults.
+ALTER TABLE "bond_holdings" ALTER COLUMN "updated_at" SET DEFAULT now();

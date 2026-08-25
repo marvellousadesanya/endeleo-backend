@@ -9,6 +9,10 @@ import { StorageService } from "@/storage/storage.service";
 import type { SubmitKycDto, UpdateProfileDto } from "./dto/profiles.dto";
 
 /** Document keys each investor type must supply before KYC can be accepted. */
+/// Tier granted when KYC documents are accepted. Bonds default to requiring 1; higher
+/// tiers are an admin grant, not something submission can earn.
+const VERIFIED_KYC_TIER = 1;
+
 const RETAIL_DOC_KEYS = ["id_document", "proof_of_address"] as const;
 const INSTITUTIONAL_DOC_KEYS = [
   "certificate_of_incorporation",
@@ -149,6 +153,19 @@ export class ProfilesService {
       }
       const { userId: _omit, ...updateData } = data;
       await tx.profile.upsert({ where: { userId }, create: data, update: updateData });
+
+      // Verification has to grant the tier as well as the status. They are separate
+      // fields on separate models — profiles.kyc_status drives what the UI shows, while
+      // users.kyc_tier is what the subscription and market gates actually compare against
+      // (bonds.kyc_tier_required defaults to 1). Setting only the status left every
+      // verified investor reading "Verified" but blocked at tier 0.
+      //
+      // updateMany with `lt` so this only ever raises a tier — an admin-granted 2 or 3
+      // must survive the user resubmitting their documents.
+      await tx.user.updateMany({
+        where: { id: userId, kycTier: { lt: VERIFIED_KYC_TIER } },
+        data: { kycTier: VERIFIED_KYC_TIER },
+      });
     });
 
     return { ok: true };
