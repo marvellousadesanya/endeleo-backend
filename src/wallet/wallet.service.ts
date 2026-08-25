@@ -26,7 +26,7 @@ export class WalletService {
     return {
       userId,
       balanceMinor: wallet?.balanceMinor ?? 0n,
-      currency: wallet?.currency ?? "USD",
+      currency: wallet?.currency ?? "NGN",
     };
   }
 
