@@ -35,5 +35,7 @@ import { EngineTick } from "./engine/engine.tick";
     SimulationService,
     EngineTick,
   ],
+  // SubmissionsModule promotes an approved submission into a bond via BondsService.
+  exports: [BondsService],
 })
 export class BondsModule {}
