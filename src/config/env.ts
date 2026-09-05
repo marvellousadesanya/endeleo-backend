@@ -28,17 +28,27 @@ const envSchema = z.object({
   BOND_ENGINE_ALLOW_SIMULATION: z.enum(["true", "false"]).optional(),
   BOND_ENGINE_MOCK_DISBURSE: z.enum(["ok", "fail", "throw"]).optional(),
 
-  // Local-disk file storage. Files are written under this root; see storage.service.ts.
-  // Swap for object storage before running more than one instance -- see README.
-  STORAGE_ROOT: z.string().default("./storage"),
-  // Signs short-lived download URLs. Distinct from the JWT secrets on purpose: a leaked
-  // download link must never be usable as a session token.
-  STORAGE_URL_SECRET: z.string().min(32).optional(),
+  // Cloudflare R2 (S3-compatible). The only file storage driver — see storage.service.ts
+  // for why a local-disk fallback used to exist here and doesn't anymore. All five are
+  // required in every environment, local development included.
+  R2_ACCOUNT_ID: z.string().min(1),
+  R2_ACCESS_KEY_ID: z.string().min(1),
+  R2_SECRET_ACCESS_KEY: z.string().min(1),
+  R2_BUCKET: z.string().min(1),
+  // The bucket's public base URL (its r2.dev address, or a custom domain bound to it —
+  // switch to that before this carries real production traffic; r2.dev is rate-limited).
+  R2_PUBLIC_URL: z.string().url(),
 
   CORS_ORIGINS: z
     .string()
     .default("")
     .transform((v) => v.split(",").map((s) => s.trim()).filter(Boolean)),
+
+  // Wallet top-ups. Test-mode secret keys look like sk_test_...; live ones sk_live_...
+  // Same key both initializes a charge and verifies Paystack's webhook signature — there
+  // is no separate webhook secret. Optional so the app boots without it; the deposit
+  // endpoints throw a clear 503 if a real request reaches them unconfigured.
+  PAYSTACK_SECRET_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -56,5 +66,6 @@ export function validateEnv(raw: Record<string, unknown>): Env {
   if (parsed.data.JWT_ACCESS_SECRET === parsed.data.JWT_REFRESH_SECRET) {
     throw new Error("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must differ");
   }
+
   return parsed.data;
 }

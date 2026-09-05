@@ -12,6 +12,22 @@ npm run migrate
 npm run dev               # http://localhost:4000/api
 ```
 
+## Test accounts
+
+`npm run dev:user` creates a local account, or resets one you've forgotten the password
+for. Default password is `endeleo-dev-local` (12-char minimum, same as the register
+endpoint); the account is KYC-verified so gated flows work.
+
+```bash
+npm run dev:user -- conntest+2077@example.com                 # investor, password endeleo-dev-local
+npm run dev:user -- admin@test.local --roles admin,editor
+npm run dev:user -- x@test.local --password 'twelve+ chars' --kyc none
+```
+
+Local-only — it refuses to run with `NODE_ENV=production`, and writes a password hash
+directly. `npm run db:seed` (bonds) needs at least one user to exist first, so run this
+before that on a fresh database.
+
 ## Layout
 
 | Path | Purpose |
@@ -21,6 +37,7 @@ npm run dev               # http://localhost:4000/api
 | `src/database` | Prisma client, wired to a pg driver adapter |
 | `src/auth` | Registration, login, rotating refresh tokens, guards |
 | `src/users` | Endeleo's own identity model |
+| `src/storage` | File storage — local disk in dev, Cloudflare R2 in production |
 | `src/health` | Liveness + database round-trip |
 
 ## Decisions
@@ -37,6 +54,16 @@ second migration tool: schema drift is how the previous setup became unrebuildab
 **Raw SQL where it matters.** The bond engine's money operations stay as Postgres
 procedures and are called with `$queryRaw`. A trigger fires for every writer; application
 code only protects the paths that go through it.
+
+**File storage is a driver, and there is only one.** `StorageService` is an abstract
+contract; `R2Storage` (Cloudflare R2 over the S3 API) is the only implementation —
+uploads go through the API, downloads are presigned URLs the browser fetches straight
+from R2. R2 wins on cost because it does not bill egress, and a document platform's
+spend is almost all egress. A `LocalDiskStorage` driver used to sit behind this same
+contract for local development; it's gone; every environment now talks to a real R2
+bucket, so there is exactly one code path for file storage instead of two that could
+drift apart. All five `R2_*` variables are required — `validateEnv` refuses to boot
+without them.
 
 **Endeleo owns identity.** The domain key is `users.id`, ours. Passwords live in a
 separate `user_credentials` table and `user_identities` is reserved for external
