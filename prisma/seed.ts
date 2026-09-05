@@ -8,6 +8,12 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Currency, type CouponFrequency } from "@prisma/client";
 
+// Same guard as dev-user.ts. Idempotent-by-isinRef limits the damage, but this still
+// has no business ever touching a production book of real bonds.
+if (process.env.NODE_ENV === "production") {
+  throw new Error("seed.ts is a local-only tool — refusing to run with NODE_ENV=production");
+}
+
 // Prisma 7 has no Rust engine, so the adapter is required here just as it is in
 // PrismaService — see src/database/prisma.service.ts.
 const connectionString = process.env.DATABASE_URL;
