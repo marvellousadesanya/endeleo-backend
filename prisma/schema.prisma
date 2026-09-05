@@ -842,6 +842,9 @@ model ProjectSubmission {
   additionalLinks      String?        @map("additional_links")
   /// Array of { name, path, mimeType, sizeBytes } — paths relative to STORAGE_ROOT.
   attachments          Json           @default("[]")
+  /// Optional cover picked at submission time. Carried onto the bond's own
+  /// coverImagePath on promotion, so a promoted bond isn't left imageless.
+  coverImagePath       String?        @map("cover_image_path")
   submitterName        String?        @map("submitter_name")
   submitterEmail       String?        @map("submitter_email")
   submitterPhone       String?        @map("submitter_phone")

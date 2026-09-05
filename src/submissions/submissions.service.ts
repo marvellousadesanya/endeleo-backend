@@ -27,7 +27,21 @@ export class SubmissionsService {
     private readonly bonds: BondsService,
   ) {}
 
-  async create(dto: CreateSubmissionDto, files: Express.Multer.File[], userId?: string) {
+  /** Adds the resolved public cover URL; the stored path itself is never exposed. */
+  private withCoverUrl<T extends { coverImagePath: string | null }>(submission: T) {
+    const { coverImagePath, ...rest } = submission;
+    return {
+      ...rest,
+      coverImageUrl: coverImagePath ? this.storage.getPublicUrl(coverImagePath) : null,
+    };
+  }
+
+  async create(
+    dto: CreateSubmissionDto,
+    files: Express.Multer.File[],
+    userId?: string,
+    coverFile?: Express.Multer.File,
+  ) {
     const attachments: StoredAttachment[] = [];
     for (const file of files) {
       const stored = await this.storage.put(
@@ -44,8 +58,21 @@ export class SubmissionsService {
       });
     }
 
+    // Stored under its own scope, distinct from the generic attachments above, so the
+    // same key can be copied straight onto the bond's coverImagePath on promotion.
+    let coverImagePath: string | null = null;
+    if (coverFile) {
+      const stored = await this.storage.put(
+        "submission-covers",
+        coverFile.originalname,
+        coverFile.mimetype || "image/jpeg",
+        coverFile.buffer,
+      );
+      coverImagePath = stored.path;
+    }
+
     try {
-      return await this.prisma.projectSubmission.create({
+      const created = await this.prisma.projectSubmission.create({
         data: {
           userId: userId ?? null,
           projectTitle: dto.projectTitle,
@@ -60,6 +87,7 @@ export class SubmissionsService {
           websiteUrl: dto.websiteUrl || null,
           additionalLinks: dto.additionalLinks || null,
           attachments: attachments as unknown as Prisma.InputJsonValue,
+          coverImagePath,
           submitterName: dto.submitterName,
           submitterEmail: dto.submitterEmail,
           submitterPhone: dto.submitterPhone || null,
@@ -68,38 +96,47 @@ export class SubmissionsService {
           status: "submitted",
         },
       });
+      return this.withCoverUrl(created);
     } catch (err) {
       // Do not leave uploaded bytes behind if the row could not be written.
       await Promise.all(attachments.map((a) => this.storage.remove(a.path)));
+      if (coverImagePath) await this.storage.remove(coverImagePath);
       throw err;
     }
   }
 
-  listMine(userId: string) {
-    return this.prisma.projectSubmission.findMany({
+  async listMine(userId: string) {
+    const rows = await this.prisma.projectSubmission.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
     });
+    return rows.map((r) => this.withCoverUrl(r));
   }
 
   // ---- Admin review --------------------------------------------------------
 
-  listAll(status?: SubmissionStatus) {
-    return this.prisma.projectSubmission.findMany({
+  async listAll(status?: SubmissionStatus) {
+    const rows = await this.prisma.projectSubmission.findMany({
       where: status ? { status } : undefined,
       orderBy: { createdAt: "desc" },
     });
+    return rows.map((r) => this.withCoverUrl(r));
   }
 
-  async findOne(id: string) {
+  /** Raw row, coverImagePath intact — for internal use (review, promote) only. */
+  private async findRaw(id: string) {
     const submission = await this.prisma.projectSubmission.findUnique({ where: { id } });
     if (!submission) throw new NotFoundException("Submission not found");
     return submission;
   }
 
+  async findOne(id: string) {
+    return this.withCoverUrl(await this.findRaw(id));
+  }
+
   /** A fresh, short-lived link to one uploaded file — minted on demand, not stored. */
   async getAttachmentDownloadUrl(id: string, index: number) {
-    const submission = await this.findOne(id);
+    const submission = await this.findRaw(id);
     const attachments = submission.attachments as unknown as StoredAttachment[];
     const attachment = attachments[index];
     if (!attachment) throw new NotFoundException("Attachment not found");
@@ -113,12 +150,12 @@ export class SubmissionsService {
 
   /** Moves a submission through in_review / approved / rejected. Never touches `promoted`. */
   async review(id: string, dto: ReviewSubmissionDto) {
-    const submission = await this.findOne(id);
+    const submission = await this.findRaw(id);
     if (submission.status === "promoted") {
       throw new BadRequestException("This submission was already promoted to a bond");
     }
 
-    return this.prisma.projectSubmission.update({
+    const updated = await this.prisma.projectSubmission.update({
       where: { id },
       data: {
         status: dto.status,
@@ -126,6 +163,7 @@ export class SubmissionsService {
         reviewedAt: new Date(),
       },
     });
+    return this.withCoverUrl(updated);
   }
 
   /**
@@ -134,7 +172,7 @@ export class SubmissionsService {
    * moves a sponsor's pitch into the investor-facing register.
    */
   async promote(id: string, dto: PromoteSubmissionDto) {
-    const submission = await this.findOne(id);
+    const submission = await this.findRaw(id);
     if (submission.status !== "approved") {
       throw new BadRequestException("Only an approved submission can be promoted");
     }
@@ -172,7 +210,19 @@ export class SubmissionsService {
     // second write below fails, the bond exists but the submission is left "approved"
     // with no bondId — recoverable by re-running promote with the same bond details,
     // but worth knowing this isn't a single database transaction.
-    const bond = await this.bonds.create(bondDto, dto.issuerId);
+    let bond = await this.bonds.create(bondDto, dto.issuerId);
+
+    // The bond's own cover wins if BondsService.create ever grows one at creation
+    // time; this only fills the gap when the bond was created bare, straight from a
+    // submission that happened to have a cover of its own.
+    if (submission.coverImagePath && !bond.coverImageUrl) {
+      await this.prisma.bond.update({
+        where: { id: bond.id },
+        data: { coverImagePath: submission.coverImagePath },
+      });
+      bond = { ...bond, coverImageUrl: this.storage.getPublicUrl(submission.coverImagePath) };
+    }
+
     await this.prisma.projectSubmission.update({
       where: { id },
       data: { status: "promoted", bondId: bond.id, reviewedAt: new Date() },
