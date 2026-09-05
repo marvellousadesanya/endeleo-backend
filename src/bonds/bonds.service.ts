@@ -2,9 +2,15 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "@/database/prisma.service";
 import { AuditService } from "@/audit/audit.service";
+import { StorageService } from "@/storage/storage.service";
+import type { AuthUser } from "@/auth/jwt.strategy";
 import { ActivationService } from "./engine/activation.service";
 import { generateIsinRef } from "./engine/money";
 import { toMinor, type CreateBondDto } from "./dto/bonds.dto";
+
+/** Cover images only — a bond cover is a photo, not a media library. */
+const MAX_COVER_BYTES = 5 * 1024 * 1024;
+const COVER_MIME = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 @Injectable()
 export class BondsService {
@@ -12,7 +18,17 @@ export class BondsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly activation: ActivationService,
+    private readonly storage: StorageService,
   ) {}
+
+  /** Adds the resolved public cover URL; the stored path itself is never exposed. */
+  private withCoverUrl<T extends { coverImagePath: string | null }>(bond: T) {
+    const { coverImagePath, ...rest } = bond;
+    return {
+      ...rest,
+      coverImageUrl: coverImagePath ? this.storage.getPublicUrl(coverImagePath) : null,
+    };
+  }
 
   async create(dto: CreateBondDto, issuerId: string) {
     const totalSizeMinor = toMinor(dto.totalSizeMinor, "totalSizeMinor");
@@ -42,6 +58,12 @@ export class BondsService {
         subscriptionCloseAt: new Date(dto.subscriptionCloseAt),
         issueDate: dto.issueDate ? new Date(dto.issueDate) : null,
         maturityDate: dto.maturityDate ? new Date(dto.maturityDate) : null,
+        location: dto.location ?? null,
+        sector: dto.sector ?? null,
+        summary: dto.summary ?? null,
+        overview: dto.overview ?? null,
+        highlights: dto.highlights ?? [],
+        risks: dto.risks ?? [],
       },
     });
 
@@ -49,16 +71,17 @@ export class BondsService {
       bondId: bond.id, userId: issuerId, event: "bond_created",
       payload: { isinRef: bond.isinRef, totalSizeMinor: totalSizeMinor.toString() },
     });
-    return bond;
+    return this.withCoverUrl(bond);
   }
 
   /** Investors see published bonds; drafts belong to their issuer and to admins. */
-  listVisible(viewer: { id: string; roles: string[] }) {
+  async listVisible(viewer: { id: string; roles: string[] }) {
     const isAdmin = viewer.roles.includes("admin");
-    return this.prisma.bond.findMany({
+    const bonds = await this.prisma.bond.findMany({
       where: isAdmin ? {} : { OR: [{ status: { not: "draft" } }, { issuerId: viewer.id }] },
       orderBy: { createdAt: "desc" },
     });
+    return bonds.map((b) => this.withCoverUrl(b));
   }
 
   async findOne(id: string, viewer: { id: string; roles: string[] }) {
@@ -67,7 +90,46 @@ export class BondsService {
     const visible =
       bond.status !== "draft" || bond.issuerId === viewer.id || viewer.roles.includes("admin");
     if (!visible) throw new NotFoundException("Bond not found");
-    return bond;
+    return this.withCoverUrl(bond);
+  }
+
+  /**
+   * Attaches (or replaces) a bond's cover image. Admins can set it on any bond; an
+   * issuer only on their own.
+   */
+  async setCoverImage(bondId: string, actor: AuthUser, file?: Express.Multer.File) {
+    if (!file) throw new BadRequestException("An image file is required");
+    if (file.size > MAX_COVER_BYTES) throw new BadRequestException("Image must be 5MB or smaller");
+    if (!COVER_MIME.has(file.mimetype)) {
+      throw new BadRequestException("Cover image must be a PNG, JPEG or WebP");
+    }
+
+    const bond = await this.prisma.bond.findUnique({
+      where: { id: bondId },
+      select: { id: true, issuerId: true, coverImagePath: true },
+    });
+    if (!bond) throw new NotFoundException("Bond not found");
+    if (!actor.roles.includes("admin") && bond.issuerId !== actor.id) {
+      throw new ForbiddenException("Not your bond");
+    }
+
+    const stored = await this.storage.put(
+      "bond-covers",
+      file.originalname,
+      file.mimetype,
+      file.buffer,
+    );
+    const updated = await this.prisma.bond.update({
+      where: { id: bondId },
+      data: { coverImagePath: stored.path },
+    });
+    if (bond.coverImagePath && bond.coverImagePath !== stored.path) {
+      await this.storage.remove(bond.coverImagePath);
+    }
+    await this.audit.record({
+      bondId, userId: actor.id, event: "bond_cover_updated", payload: { path: stored.path },
+    });
+    return this.withCoverUrl(updated);
   }
 
   /**
@@ -80,7 +142,7 @@ export class BondsService {
 
     if (status === "active") {
       await this.activation.activate(id, { actorId });
-      return this.prisma.bond.findUniqueOrThrow({ where: { id } });
+      return this.withCoverUrl(await this.prisma.bond.findUniqueOrThrow({ where: { id } }));
     }
 
     // The database enforces which transitions are legal; this surfaces the refusal as a
@@ -91,7 +153,7 @@ export class BondsService {
         data: { status: status as never },
       });
       await this.audit.record({ bondId: id, userId: actorId, event: "bond_state_changed", payload: { to: status } });
-      return updated;
+      return this.withCoverUrl(updated);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (message.includes("Illegal bond status transition")) {
@@ -109,7 +171,7 @@ export class BondsService {
           select: {
             id: true, title: true, isinRef: true, currency: true, status: true,
             couponRateBps: true, couponFrequency: true, maturityDate: true, issueDate: true,
-            tenorMonths: true, projectSlug: true, spvReference: true,
+            tenorMonths: true, projectSlug: true, spvReference: true, sector: true,
           },
         },
       },

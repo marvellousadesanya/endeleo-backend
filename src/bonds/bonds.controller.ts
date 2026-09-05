@@ -1,5 +1,9 @@
 // Bond issuance, browsing and the register.
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import {
+  Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query,
+  UploadedFile, UseGuards, UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { CurrentUser } from "@/auth/current-user.decorator";
 import { JwtAuthGuard } from "@/auth/jwt-auth.guard";
 import { Roles, RolesGuard } from "@/auth/roles.guard";
@@ -7,6 +11,8 @@ import type { AuthUser } from "@/auth/jwt.strategy";
 import { BondsService } from "./bonds.service";
 import { ReportsService } from "./reports.service";
 import { ChangeStatusDto, CreateBondDto, RecordEscrowDto } from "./dto/bonds.dto";
+
+const MAX_COVER_BYTES = 5 * 1024 * 1024;
 
 @Controller("bonds")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -45,6 +51,18 @@ export class BondsController {
   @Roles("admin", "issuer")
   create(@Body() dto: CreateBondDto, @CurrentUser() user: AuthUser) {
     return this.bonds.create(dto, user.id);
+  }
+
+  /** Set or replace a bond's cover image. Sent right after create, or on its own later. */
+  @Post(":id/cover")
+  @Roles("admin", "issuer")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: MAX_COVER_BYTES } }))
+  setCover(
+    @Param("id", ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.bonds.setCoverImage(id, user, file);
   }
 
   @Patch(":id/status")

@@ -39,6 +39,17 @@ enum SubmitterType {
   @@map("submitter_type")
 }
 
+enum SubmissionStatus {
+  submitted
+  in_review
+  approved
+  rejected
+  /// Terminal: a bond has been created from this submission. See `bondId`.
+  promoted
+
+  @@map("submission_status")
+}
+
 enum KycStatus {
   none
   pending
@@ -298,6 +309,16 @@ model Bond {
   spvReference String  @map("spv_reference")
   title        String
 
+  /// Investor-facing project content. Nullable / empty by default: older bonds and the
+  /// seeded demo set fall back to the frontend's projects.ts fixture, matched by slug.
+  coverImagePath String?  @map("cover_image_path")
+  location       String?
+  sector         String?
+  summary        String?
+  overview       String?
+  highlights     String[] @default([])
+  risks          String[] @default([])
+
   currency               Currency        @default(NGN)
   totalSizeMinor         BigInt          @map("total_size_minor")
   minimumInvestmentMinor BigInt          @map("minimum_investment_minor")
@@ -335,6 +356,9 @@ model Bond {
   trades            MarketTrade[]
   auditEntries      BondAuditEntry[]
   dataRoomDocuments DataRoomDocument[]
+  /// The sponsor submission this bond was promoted from, if any — admin-created bonds
+  /// have none.
+  submission        ProjectSubmission?
 
   @@index([status])
   @@map("bonds")
@@ -371,7 +395,10 @@ model Holding {
   unitsMinor      BigInt   @map("units_minor")
   certificateHash String?  @map("certificate_hash")
   firstSettledAt  DateTime @default(now()) @map("first_settled_at") @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  /// @default(now()) as well as @updatedAt: allocate_subscription() is a PL/pgSQL
+  /// procedure that bypasses Prisma and relies on the database default on INSERT. See
+  /// migration 20260825141006. Without it, allocation fails the NOT NULL constraint.
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   bond Bond @relation(fields: [bondId], references: [id], onDelete: Restrict)
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
@@ -820,14 +847,22 @@ model ProjectSubmission {
   submitterPhone       String?        @map("submitter_phone")
   submitterType        SubmitterType? @map("submitter_type")
   role                 String?
-  status               String         @default("submitted")
-  reviewerNotes        String?        @map("reviewer_notes")
-  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  status               SubmissionStatus @default(submitted)
+  reviewerNotes        String?          @map("reviewer_notes")
+  /// Set when status moves out of "submitted" — an admin looked at it.
+  reviewedAt           DateTime?        @map("reviewed_at") @db.Timestamptz(6)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  /// Set once promoted. SetNull rather than cascade: deleting the bond should not
+  /// erase the sponsor's original submission history.
+  bondId String? @unique @map("bond_id") @db.Uuid
+  bond   Bond?   @relation(fields: [bondId], references: [id], onDelete: SetNull)
+
   @@index([userId, createdAt])
+  @@index([status, createdAt])
   @@map("project_submissions")
 }
 

@@ -1,7 +1,7 @@
 import { Type } from "class-transformer";
 import {
   ArrayMaxSize, IsArray, IsDateString, IsEnum, IsInt, IsISO8601, IsOptional,
-  IsString, IsUUID, Length, Max, Min,
+  IsString, IsUUID, Length, Max, MaxLength, Min,
 } from "class-validator";
 
 /**
@@ -40,6 +40,19 @@ export class CreateBondDto {
   /** Optional. Left unset, both are derived at activation. */
   @IsOptional() @IsDateString() issueDate?: string;
   @IsOptional() @IsDateString() maturityDate?: string;
+
+  // ---- Investor-facing project content ----------------------------------------
+  // All optional. A bond with none of it falls back to the frontend fixture by slug.
+  @IsOptional() @IsString() @MaxLength(120) location?: string;
+  @IsOptional() @IsString() @MaxLength(120) sector?: string;
+  @IsOptional() @IsString() @MaxLength(280) summary?: string;
+  @IsOptional() @IsString() @MaxLength(5000) overview?: string;
+
+  @IsOptional() @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) @MaxLength(240, { each: true })
+  highlights?: string[];
+
+  @IsOptional() @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) @MaxLength(240, { each: true })
+  risks?: string[];
 }
 
 export class ChangeStatusDto {

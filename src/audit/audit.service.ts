@@ -8,7 +8,7 @@ import { PrismaService } from "@/database/prisma.service";
 
 /** Everything the engine can record. Kept as a union so typos fail to compile. */
 export type AuditEvent =
-  | "bond_created" | "bond_state_changed" | "bond_activated"
+  | "bond_created" | "bond_state_changed" | "bond_activated" | "bond_cover_updated"
   | "subscription_created" | "subscription_cancelled" | "allocation_executed"
   | "allocation_reversed" | "funds_escrowed" | "funds_refunded"
   | "capacity_block" | "concentration_block" | "kyc_block"

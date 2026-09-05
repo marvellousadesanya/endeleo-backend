@@ -74,13 +74,23 @@ export class DataRoomService {
   }
 
   /**
-   * Checks the caller may open the document, then mints a short-lived token. The token
-   * is bound to both the document and the user, so it cannot be passed to someone else.
+   * Checks the caller may open the document, then asks the storage driver for a
+   * short-lived URL. That URL is a bearer capability — anyone holding it can fetch the
+   * file until it expires — so the lifetime is deliberately minutes, not hours. The
+   * previous per-user binding does not survive the move to presigned object-store URLs;
+   * the short TTL is the trade.
    */
   async createDownloadToken(user: AuthUser, documentId: string) {
     const doc = await this.prisma.dataRoomDocument.findUnique({
       where: { id: documentId },
-      select: { id: true, isPublished: true, requiresSignature: true, mimeType: true },
+      select: {
+        id: true,
+        isPublished: true,
+        requiresSignature: true,
+        mimeType: true,
+        fileName: true,
+        filePath: true,
+      },
     });
     if (!doc) throw new NotFoundException("Document not found");
 
@@ -98,24 +108,11 @@ export class DataRoomService {
       if (!signature) throw new ForbiddenException("Signature required");
     }
 
-    const token = this.storage.signToken(doc.id, user.id);
-    return {
-      url: `/api/data-room/documents/${doc.id}/file?token=${token}`,
-      mimeType: doc.mimeType,
-    };
-  }
-
-  /** Re-verifies the token, then hands back the path for the controller to stream. */
-  async resolveDownload(documentId: string, userId: string, token: string) {
-    if (!this.storage.verifyToken(token, documentId, userId)) {
-      throw new ForbiddenException("Link expired or invalid");
-    }
-    const doc = await this.prisma.dataRoomDocument.findUnique({
-      where: { id: documentId },
-      select: { filePath: true, fileName: true, mimeType: true },
+    const url = await this.storage.getDownloadUrl(doc.filePath, {
+      fileName: doc.fileName,
+      mimeType: doc.mimeType ?? "application/octet-stream",
     });
-    if (!doc) throw new NotFoundException("Document not found");
-    return doc;
+    return { url, mimeType: doc.mimeType };
   }
 
   /** Signing twice is a no-op rather than a second row — the unique index enforces it. */
