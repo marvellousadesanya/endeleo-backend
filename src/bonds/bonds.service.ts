@@ -75,12 +75,33 @@ export class BondsService {
   }
 
   /** Investors see published bonds; drafts belong to their issuer and to admins. */
-  async listVisible(viewer: { id: string; roles: string[] }) {
-    const isAdmin = viewer.roles.includes("admin");
+  /**
+   * The investor-facing list. Never includes a draft, for anyone — this used to also
+   * show every draft to an admin or issuer, which meant an admin/issuer test account
+   * saw unpublished bonds bleeding into what's supposed to look like the plain investor
+   * "Projects" page. Admins get their own full list (listAllForAdmin); an issuer
+   * previewing their own unpublished bond gets listMine.
+   */
+  async listPublished() {
     const bonds = await this.prisma.bond.findMany({
-      where: isAdmin ? {} : { OR: [{ status: { not: "draft" } }, { issuerId: viewer.id }] },
+      where: { status: { not: "draft" } },
       orderBy: { createdAt: "desc" },
     });
+    return bonds.map((b) => this.withCoverUrl(b));
+  }
+
+  /** A sponsor's own bonds, any status — so they can see a bond before it's published. */
+  async listMine(issuerId: string) {
+    const bonds = await this.prisma.bond.findMany({
+      where: { issuerId },
+      orderBy: { createdAt: "desc" },
+    });
+    return bonds.map((b) => this.withCoverUrl(b));
+  }
+
+  /** Admin console only — every bond regardless of status or issuer. */
+  async listAllForAdmin() {
+    const bonds = await this.prisma.bond.findMany({ orderBy: { createdAt: "desc" } });
     return bonds.map((b) => this.withCoverUrl(b));
   }
 

@@ -22,14 +22,28 @@ export class BondsController {
     private readonly reports: ReportsService,
   ) {}
 
+  /** The investor-facing list — published bonds only, for every caller, no exceptions. */
   @Get()
-  list(@CurrentUser() user: AuthUser) {
-    return this.bonds.listVisible(user);
+  list() {
+    return this.bonds.listPublished();
   }
 
   @Get("holdings")
   holdings(@CurrentUser() user: AuthUser) {
     return this.bonds.holdingsFor(user.id);
+  }
+
+  /** A sponsor's own bonds, any status — lets them see a bond before it's published. */
+  @Get("mine")
+  mine(@CurrentUser() user: AuthUser) {
+    return this.bonds.listMine(user.id);
+  }
+
+  /** Admin console only — every bond, published or not. */
+  @Get("admin")
+  @Roles("admin")
+  listAllAdmin() {
+    return this.bonds.listAllForAdmin();
   }
 
   @Get(":id")
