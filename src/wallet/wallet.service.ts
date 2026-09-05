@@ -340,7 +340,7 @@ export class WalletService {
         data: {
           userId: args.userId,
           title: args.kind === "payout" ? "Payout received" : "Refund received",
-          body: `${this.majorAmount(args.amountMinor)} ${
+          body: `₦${this.majorAmount(args.amountMinor)} ${
             args.kind === "payout" ? "credited to your wallet" : "refunded to your wallet"
           } — ${args.note}.`,
           href: "/dashboard/wallet",
@@ -407,8 +407,8 @@ export class WalletService {
       maximumFractionDigits: 2,
     });
     return kind === "deposit"
-      ? `$${major} added to your wallet via ${method}.`
-      : `$${major} sent to ${note} via ${method}.`;
+      ? `₦${major} added to your wallet via ${method}.`
+      : `₦${major} sent to ${note} via ${method}.`;
   }
 
   // ---- Notifications -------------------------------------------------------
