@@ -102,6 +102,8 @@ model User {
   applications     InvestorApplication[]
   mfaFactors       MfaFactor[]
   mfaChallenges    MfaChallenge[]
+  teamOwnerOf      SponsorTeamMember[] @relation("TeamOwner")
+  teamMemberOf     SponsorTeamMember[] @relation("TeamMember")
 
   @@map("users")
 }
@@ -356,6 +358,9 @@ model Bond {
   trades            MarketTrade[]
   auditEntries      BondAuditEntry[]
   dataRoomDocuments DataRoomDocument[]
+  checklistItems    SponsorChecklistItem[]
+  agreements        SponsorAgreement[]
+  fundingMilestones FundingMilestone[]
   /// The sponsor submission this bond was promoted from, if any — admin-created bonds
   /// have none.
   submission        ProjectSubmission?
@@ -948,4 +953,149 @@ model MfaChallenge {
 
   @@index([expiresAt])
   @@map("mfa_challenges")
+}
+
+// ---- Sponsor portal ---------------------------------------------------------
+// A sponsor's deal-management workspace, one bond at a time: compliance and due
+// diligence checklists, agreements awaiting signature, a funding/disbursement
+// schedule, and who on their team can see what. All admin-managed or sponsor-actioned
+// — no hardcoded demo rows.
+
+enum ChecklistKind {
+  compliance
+  due_diligence
+
+  @@map("checklist_kind")
+}
+
+enum ChecklistStatus {
+  not_started
+  in_progress
+  submitted
+  verified
+  rejected
+
+  @@map("checklist_status")
+}
+
+/// One compliance (KYB) or due-diligence line item for a bond. Admin seeds the
+/// checklist when a bond is created, the sponsor submits evidence, admin verifies.
+model SponsorChecklistItem {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId       String          @map("bond_id") @db.Uuid
+  kind         ChecklistKind
+  /// Free-text grouping — "Corporate", "Financial", "Legal"... — null for compliance
+  /// items, which aren't grouped.
+  area         String?
+  label        String
+  status       ChecklistStatus @default(not_started)
+  notes        String?
+  /// An uploaded evidence file, if the sponsor attached one. Relative to storage root.
+  evidencePath String?         @map("evidence_path")
+  verifiedBy   String?         @map("verified_by") @db.Uuid
+  verifiedAt   DateTime?       @map("verified_at") @db.Timestamptz(6)
+  sortOrder    Int             @default(0) @map("sort_order")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Cascade)
+
+  @@index([bondId, kind])
+  @@map("sponsor_checklist_items")
+}
+
+enum AgreementStatus {
+  draft
+  sent
+  signed
+
+  @@map("agreement_status")
+}
+
+/// A named legal document (NDA, mandate letter, term sheet...) a sponsor must sign.
+/// Admin uploads it and sends it; the sponsor signs it, on the record.
+model SponsorAgreement {
+  id         String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId     String          @map("bond_id") @db.Uuid
+  title      String
+  category   String          @default("general")
+  filePath   String?         @map("file_path")
+  fileName   String?         @map("file_name")
+  mimeType   String?         @map("mime_type")
+  status     AgreementStatus @default(draft)
+  sentAt     DateTime?       @map("sent_at") @db.Timestamptz(6)
+  signedAt   DateTime?       @map("signed_at") @db.Timestamptz(6)
+  signedName String?         @map("signed_name")
+  signedBy   String?         @map("signed_by") @db.Uuid
+  sortOrder  Int             @default(0) @map("sort_order")
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Cascade)
+
+  @@index([bondId])
+  @@map("sponsor_agreements")
+}
+
+enum MilestoneStatus {
+  pending
+  due
+  released
+
+  @@map("milestone_status")
+}
+
+/// One disbursement tranche against a bond's raise — admin releases funds against it
+/// as conditions are met, the sponsor sees exactly what's released and what's pending.
+model FundingMilestone {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bondId      String          @map("bond_id") @db.Uuid
+  label       String
+  targetMinor BigInt          @map("target_minor")
+  dueDate     DateTime?       @map("due_date") @db.Date
+  status      MilestoneStatus @default(pending)
+  releasedAt  DateTime?       @map("released_at") @db.Timestamptz(6)
+  notes       String?
+  sortOrder   Int             @default(0) @map("sort_order")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Cascade)
+
+  @@index([bondId])
+  @@map("funding_milestones")
+}
+
+enum TeamRole {
+  editor
+  viewer
+
+  @@map("team_role")
+}
+
+enum TeamMemberStatus {
+  pending
+  active
+
+  @@map("team_member_status")
+}
+
+/// A teammate a sponsor has invited to help manage their bonds. `memberUserId` is null
+/// until the invited email signs up or links an existing account.
+model SponsorTeamMember {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerUserId  String           @map("owner_user_id") @db.Uuid
+  memberUserId String?          @map("member_user_id") @db.Uuid
+  invitedEmail String           @map("invited_email")
+  role         TeamRole         @default(viewer)
+  status       TeamMemberStatus @default(pending)
+  invitedAt    DateTime         @default(now()) @map("invited_at") @db.Timestamptz(6)
+  joinedAt     DateTime?        @map("joined_at") @db.Timestamptz(6)
+
+  owner  User  @relation("TeamOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  member User? @relation("TeamMember", fields: [memberUserId], references: [id], onDelete: SetNull)
+
+  @@unique([ownerUserId, invitedEmail])
+  @@index([ownerUserId])
+  @@map("sponsor_team_members")
 }

@@ -17,6 +17,7 @@ import { StorageModule } from "@/storage/storage.module";
 import { SubmissionsModule } from "@/submissions/submissions.module";
 import { SchedulerModule } from "@/scheduler/scheduler.module";
 import { UsersModule } from "@/users/users.module";
+import { SponsorPortalModule } from "@/sponsor-portal/sponsor-portal.module";
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { UsersModule } from "@/users/users.module";
     DataRoomModule,
     ContentModule,
     SubmissionsModule,
+    SponsorPortalModule,
     HealthModule,
   ],
 })

@@ -71,7 +71,57 @@ export class BondsService {
       bondId: bond.id, userId: issuerId, event: "bond_created",
       payload: { isinRef: bond.isinRef, totalSizeMinor: totalSizeMinor.toString() },
     });
+    await this.seedChecklist(bond.id);
+    await this.seedAgreements(bond.id);
     return this.withCoverUrl(bond);
+  }
+
+  /**
+   * Every bond starts with the same standard compliance (KYB) and due-diligence
+   * checklist — items a sponsor works through and admin verifies, on the sponsor
+   * portal. Seeded once at creation rather than requiring admin to type them out per
+   * bond; a sponsor's own progress is theirs to fill in from there.
+   */
+  private async seedChecklist(bondId: string) {
+    const compliance = [
+      "CAC verification", "Beneficial ownership disclosure", "Authorised signatories",
+      "AML / sanctions screening", "PEP screening", "Tax clearance certificate",
+    ].map((label, i) => ({ bondId, kind: "compliance" as const, label, sortOrder: i }));
+
+    const dueDiligence: { area: string; label: string }[] = [
+      { area: "Corporate", label: "Certificate of incorporation" },
+      { area: "Corporate", label: "Memorandum & articles of association" },
+      { area: "Financial", label: "Audited financial statements (3 years)" },
+      { area: "Financial", label: "Management accounts (latest quarter)" },
+      { area: "Technical", label: "Feasibility / technical study" },
+      { area: "Legal", label: "Title / land documents" },
+      { area: "Legal", label: "Material contracts" },
+      { area: "ESG", label: "Environmental & social impact assessment" },
+    ];
+
+    await this.prisma.sponsorChecklistItem.createMany({
+      data: [
+        ...compliance,
+        ...dueDiligence.map((d, i) => ({
+          bondId, kind: "due_diligence" as const, area: d.area, label: d.label, sortOrder: i,
+        })),
+      ],
+    });
+  }
+
+  /**
+   * The standard document set every deal expects — seeded as `draft` with no file
+   * attached, since none has been drawn up yet. Admin uploads and sends each one when
+   * it's ready; the sponsor sees what's coming before that happens, which is itself
+   * useful rather than a placeholder.
+   */
+  private async seedAgreements(bondId: string) {
+    const titles = [
+      "Mutual NDA", "Mandate Letter", "Term Sheet", "Subscription Agreement", "Trust Deed",
+    ];
+    await this.prisma.sponsorAgreement.createMany({
+      data: titles.map((title, i) => ({ bondId, title, sortOrder: i })),
+    });
   }
 
   /** Investors see published bonds; drafts belong to their issuer and to admins. */
