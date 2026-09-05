@@ -11,14 +11,23 @@
 //     the same balance and both pass the funds check, overdrawing the account. The
 //     balance change, the ledger row and the notification now happen inside one
 //     transaction, and the debit is applied by the database rather than computed here.
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
+import {
+  BadRequestException, ForbiddenException, Injectable, NotFoundException,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { Prisma, WalletTxKind } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
+import { PaystackService } from "./paystack.service";
 import type { TransferDto } from "./dto/wallet.dto";
 
 @Injectable()
 export class WalletService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+    private readonly paystack: PaystackService,
+  ) {}
 
   /** A wallet row is created on first use, so accounts predating this module work. */
   async findForUser(userId: string) {
@@ -44,6 +53,264 @@ export class WalletService {
 
   withdraw(userId: string, dto: TransferDto & { destination: string }) {
     return this.applyTransaction(userId, "withdrawal", dto, dto.destination);
+  }
+
+  // ---- Paystack deposits ----------------------------------------------------
+  // Replaces the trust-the-client instant credit above with a real charge: a pending
+  // ledger row is opened here, and only ever moved to "completed" once Paystack has
+  // confirmed the money actually arrived (see confirmPaystackDeposit).
+
+  async initializePaystackDeposit(user: { id: string; email: string }, amountMinor: string) {
+    const amount = BigInt(amountMinor);
+    if (amount <= 0n) throw new BadRequestException("Amount must be positive");
+
+    // App-generated, never client-supplied — a spoofed reference could otherwise let
+    // one request confirm against another user's pending deposit.
+    const reference = `dep_${randomUUID()}`;
+    await this.prisma.walletTransaction.create({
+      data: {
+        userId: user.id,
+        kind: "deposit",
+        status: "pending",
+        amountMinor: amount,
+        method: "paystack",
+        reference,
+        note: "Wallet top-up via Paystack",
+      },
+    });
+
+    const frontendUrl = this.config.get<string>("FRONTEND_URL");
+    const { authorizationUrl } = await this.paystack.initialize({
+      email: user.email,
+      amountMinor: amount,
+      reference,
+      callbackUrl: `${frontendUrl}/dashboard/wallet?paystack_reference=${reference}`,
+    });
+
+    return { authorizationUrl, reference };
+  }
+
+  /**
+   * Called after the browser is redirected back from Paystack. Fetches the
+   * authoritative status from Paystack's own verify API rather than trusting the
+   * reference alone — a callback URL is just a browser navigation, not proof of payment.
+   */
+  async verifyPaystackDeposit(userId: string, reference: string) {
+    const record = await this.prisma.walletTransaction.findFirst({
+      where: { reference, method: "paystack" },
+    });
+    if (!record) throw new NotFoundException("Deposit not found");
+    if (record.userId !== userId) throw new ForbiddenException("Not your deposit");
+
+    if (record.status !== "pending") {
+      const wallet = await this.findForUser(userId);
+      return { status: record.status, balanceMinor: wallet.balanceMinor };
+    }
+
+    const result = await this.paystack.verify(reference);
+    return this.confirmPaystackDeposit(reference, {
+      status: result.status,
+      amountMinor: BigInt(result.amount),
+    });
+  }
+
+  /**
+   * The one place a Paystack deposit actually gets credited. Called from both
+   * verifyPaystackDeposit (the browser-callback path) and the webhook controller — race
+   * is expected, since either can arrive first. `FOR UPDATE` on the ledger row is what
+   * makes it safe: the second caller blocks until the first commits, then sees the row
+   * is no longer "pending" and returns without crediting twice.
+   */
+  async confirmPaystackDeposit(reference: string, result: { status: string; amountMinor: bigint }) {
+    return this.prisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<
+        { id: string; user_id: string; amount_minor: bigint; status: string }[]
+      >`
+        SELECT id, user_id, amount_minor, status FROM wallet_transactions
+        WHERE reference = ${reference} AND method = 'paystack'
+        FOR UPDATE
+      `;
+      if (!locked) throw new NotFoundException("Deposit not found");
+      if (locked.status !== "pending") {
+        return { alreadyProcessed: true, status: locked.status };
+      }
+
+      if (result.status !== "success") {
+        await tx.walletTransaction.update({ where: { id: locked.id }, data: { status: "failed" } });
+        return { alreadyProcessed: false, status: "failed" };
+      }
+      if (result.amountMinor !== locked.amount_minor) {
+        // Paid a different amount than requested — never credit blindly.
+        await tx.walletTransaction.update({ where: { id: locked.id }, data: { status: "failed" } });
+        throw new BadRequestException("Paid amount did not match the requested deposit");
+      }
+
+      await tx.wallet.upsert({
+        where: { userId: locked.user_id },
+        create: { userId: locked.user_id, balanceMinor: 0n },
+        update: {},
+      });
+      const wallet = await tx.wallet.update({
+        where: { userId: locked.user_id },
+        data: { balanceMinor: { increment: locked.amount_minor } },
+      });
+      await tx.walletTransaction.update({
+        where: { id: locked.id },
+        data: { status: "completed", completedAt: new Date() },
+      });
+      await tx.notification.create({
+        data: {
+          userId: locked.user_id,
+          title: "Funds added",
+          body: this.describe("deposit", locked.amount_minor, "Paystack", "Wallet top-up"),
+          href: "/dashboard/wallet",
+        },
+      });
+
+      return { alreadyProcessed: false, status: "completed", balanceMinor: wallet.balanceMinor };
+    });
+  }
+
+  // ---- Paystack withdrawals ---------------------------------------------------
+  // The mirror image of deposits, and for a deliberately different reason: a deposit
+  // isn't credited until Paystack confirms the money arrived, but a withdrawal debits
+  // (reserves) the wallet immediately — the money is already ours, and the risk is the
+  // investor spending the same balance twice while a transfer is in flight. If the
+  // transfer then fails, confirmPaystackWithdrawal puts it back.
+
+  listBanks() {
+    return this.paystack.listBanks();
+  }
+
+  resolveWithdrawalAccount(accountNumber: string, bankCode: string) {
+    return this.paystack.resolveAccount(accountNumber, bankCode);
+  }
+
+  async initiatePaystackWithdrawal(
+    userId: string,
+    dto: { amountMinor: string; accountNumber: string; bankCode: string },
+  ) {
+    const amount = BigInt(dto.amountMinor);
+    if (amount <= 0n) throw new BadRequestException("Amount must be positive");
+
+    // Never trust a client-supplied account name — resolve it ourselves right before
+    // committing to anything.
+    const resolved = await this.paystack.resolveAccount(dto.accountNumber, dto.bankCode);
+    const reference = `wd_${randomUUID()}`;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.wallet.upsert({
+        where: { userId },
+        create: { userId, balanceMinor: 0n },
+        update: {},
+      });
+      const [locked] = await tx.$queryRaw<{ balance_minor: bigint }[]>`
+        SELECT balance_minor FROM wallets WHERE user_id = ${userId}::uuid FOR UPDATE
+      `;
+      const current = locked?.balance_minor ?? 0n;
+      if (current < amount) throw new BadRequestException("Insufficient funds");
+
+      await tx.wallet.update({ where: { userId }, data: { balanceMinor: { decrement: amount } } });
+      await tx.walletTransaction.create({
+        data: {
+          userId,
+          kind: "withdrawal",
+          status: "pending",
+          amountMinor: amount,
+          method: "paystack",
+          reference,
+          note: `Withdrawal to ${resolved.accountName} · ${dto.accountNumber}`,
+        },
+      });
+    });
+
+    // The transfer call itself is a network round trip to Paystack — it belongs
+    // outside the DB transaction above, not holding that row lock open across it.
+    try {
+      const recipient = await this.paystack.createTransferRecipient({
+        accountNumber: dto.accountNumber,
+        bankCode: dto.bankCode,
+        name: resolved.accountName,
+      });
+      const transfer = await this.paystack.initiateTransfer({
+        amountMinor: amount,
+        recipientCode: recipient.recipientCode,
+        reason: "Wallet withdrawal",
+        reference,
+      });
+
+      // Some accounts (typically test mode) settle synchronously instead of waiting
+      // for the webhook. Either way confirmPaystackWithdrawal is idempotent, so acting
+      // on it here and again from a webhook that arrives later is harmless.
+      if (transfer.status === "success") {
+        await this.confirmPaystackWithdrawal(reference, "success");
+      } else if (transfer.status === "failed" || transfer.status === "reversed") {
+        await this.confirmPaystackWithdrawal(reference, "failed");
+      }
+    } catch (err) {
+      // Paystack rejected the transfer outright — refund now rather than leaving the
+      // investor's money reserved, waiting for a webhook that will never arrive.
+      await this.confirmPaystackWithdrawal(reference, "failed");
+      throw err;
+    }
+
+    const wallet = await this.findForUser(userId);
+    return { reference, accountName: resolved.accountName, balanceMinor: wallet.balanceMinor };
+  }
+
+  /**
+   * The one place a Paystack withdrawal is actually settled — reached from
+   * initiatePaystackWithdrawal's synchronous path and from transfer.success /
+   * transfer.failed / transfer.reversed on the webhook. `FOR UPDATE` makes it safe for
+   * both to reach the same reference: the second caller blocks until the first
+   * commits, then sees the row is no longer "pending" and no-ops.
+   */
+  async confirmPaystackWithdrawal(reference: string, status: "success" | "failed") {
+    return this.prisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<
+        { id: string; user_id: string; amount_minor: bigint; status: string }[]
+      >`
+        SELECT id, user_id, amount_minor, status FROM wallet_transactions
+        WHERE reference = ${reference} AND method = 'paystack' AND kind = 'withdrawal'
+        FOR UPDATE
+      `;
+      if (!locked) throw new NotFoundException("Withdrawal not found");
+      if (locked.status !== "pending") {
+        return { alreadyProcessed: true, status: locked.status };
+      }
+
+      if (status === "success") {
+        await tx.walletTransaction.update({
+          where: { id: locked.id },
+          data: { status: "completed", completedAt: new Date() },
+        });
+        await tx.notification.create({
+          data: {
+            userId: locked.user_id,
+            title: "Withdrawal sent",
+            body: this.describe("withdrawal", locked.amount_minor, "Paystack", "your bank account"),
+            href: "/dashboard/wallet",
+          },
+        });
+        return { alreadyProcessed: false, status: "completed" };
+      }
+
+      // Failed or reversed — give the reserved funds back.
+      await tx.wallet.update({
+        where: { userId: locked.user_id },
+        data: { balanceMinor: { increment: locked.amount_minor } },
+      });
+      await tx.walletTransaction.update({ where: { id: locked.id }, data: { status: "failed" } });
+      await tx.notification.create({
+        data: {
+          userId: locked.user_id,
+          title: "Withdrawal failed",
+          body: "Your withdrawal could not be completed. The funds have been returned to your wallet.",
+          href: "/dashboard/wallet",
+        },
+      });
+      return { alreadyProcessed: false, status: "failed" };
+    });
   }
 
   private async applyTransaction(

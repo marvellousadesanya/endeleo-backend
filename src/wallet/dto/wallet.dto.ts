@@ -15,3 +15,28 @@ export class TransferDto {
 export class WithdrawDto extends TransferDto {
   @IsString() @Length(2, 120) destination!: string;
 }
+
+export class InitializePaystackDepositDto {
+  @Matches(MINOR, { message: "amountMinor must be a whole number of minor units, as a string" })
+  amountMinor!: string;
+}
+
+/** NUBAN — the standard 10-digit Nigerian bank account number. */
+const NUBAN = /^\d{10}$/;
+
+export class ResolveBankAccountDto {
+  @Matches(NUBAN, { message: "accountNumber must be a 10-digit NUBAN" })
+  accountNumber!: string;
+
+  @IsString() @Length(1, 10) bankCode!: string;
+}
+
+export class InitiatePaystackWithdrawalDto {
+  @Matches(MINOR, { message: "amountMinor must be a whole number of minor units, as a string" })
+  amountMinor!: string;
+
+  @Matches(NUBAN, { message: "accountNumber must be a 10-digit NUBAN" })
+  accountNumber!: string;
+
+  @IsString() @Length(1, 10) bankCode!: string;
+}
