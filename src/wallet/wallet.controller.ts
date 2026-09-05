@@ -4,7 +4,6 @@ import { JwtAuthGuard } from "@/auth/jwt-auth.guard";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import {
   InitializePaystackDepositDto, InitiatePaystackWithdrawalDto, ResolveBankAccountDto,
-  TransferDto, WithdrawDto,
 } from "./dto/wallet.dto";
 import { WalletService } from "./wallet.service";
 
@@ -21,18 +20,6 @@ export class WalletController {
   @Get("transactions")
   transactions(@CurrentUser() user: AuthUser) {
     return this.wallet.listTransactions(user.id);
-  }
-
-  @Post("deposit")
-  @HttpCode(200)
-  deposit(@CurrentUser() user: AuthUser, @Body() dto: TransferDto) {
-    return this.wallet.deposit(user.id, dto);
-  }
-
-  @Post("withdraw")
-  @HttpCode(200)
-  withdraw(@CurrentUser() user: AuthUser, @Body() dto: WithdrawDto) {
-    return this.wallet.withdraw(user.id, dto);
   }
 
   /** Starts a real charge — returns a Paystack checkout URL, does not touch the balance. */

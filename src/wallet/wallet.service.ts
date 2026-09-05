@@ -1,25 +1,17 @@
-// Wallet: balance, ledger, deposits and withdrawals.
-//
-// Two things were wrong in the Supabase implementation this replaces, and both are
-// fixed here rather than ported:
-//
-//  1. Balances were floats (`balance_usd numeric`) added with JavaScript arithmetic.
-//     Money is now integer minor units in BIGINT, like the rest of the system.
-//
-//  2. A withdrawal read the balance, subtracted in application code, then wrote it
-//     back — three separate round-trips. Two concurrent withdrawals could both read
-//     the same balance and both pass the funds check, overdrawing the account. The
-//     balance change, the ledger row and the notification now happen inside one
-//     transaction, and the debit is applied by the database rather than computed here.
+// Wallet: balance, ledger, deposits and withdrawals — both real, over Paystack. Money
+// only ever moves after a payment provider confirms it, never on the client's word
+// alone; a former trust-the-client deposit/withdraw pair that instantly credited
+// whatever amount a request claimed (and could be laundered straight into a real bank
+// transfer via the Paystack withdrawal below) has been removed — see git history if
+// you need to see what that looked like.
 import { randomUUID } from "node:crypto";
 import {
   BadRequestException, ForbiddenException, Injectable, NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import type { Prisma, WalletTxKind } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { PaystackService } from "./paystack.service";
-import type { TransferDto } from "./dto/wallet.dto";
 
 @Injectable()
 export class WalletService {
@@ -45,14 +37,6 @@ export class WalletService {
       orderBy: { createdAt: "desc" },
       take: Math.min(limit, 200),
     });
-  }
-
-  deposit(userId: string, dto: TransferDto) {
-    return this.applyTransaction(userId, "deposit", dto, `Deposit via ${dto.method}`);
-  }
-
-  withdraw(userId: string, dto: TransferDto & { destination: string }) {
-    return this.applyTransaction(userId, "withdrawal", dto, dto.destination);
   }
 
   // ---- Paystack deposits ----------------------------------------------------
@@ -310,65 +294,6 @@ export class WalletService {
         },
       });
       return { alreadyProcessed: false, status: "failed" };
-    });
-  }
-
-  private async applyTransaction(
-    userId: string,
-    kind: Extract<WalletTxKind, "deposit" | "withdrawal">,
-    dto: TransferDto,
-    note: string,
-  ) {
-    const amount = BigInt(dto.amountMinor);
-    if (amount <= 0n) throw new BadRequestException("Amount must be positive");
-
-    const delta = kind === "deposit" ? amount : -amount;
-
-    return this.prisma.$transaction(async (tx) => {
-      // Ensure the row exists and lock it for the rest of the transaction. Without the
-      // lock, two concurrent withdrawals could each pass the funds check below.
-      await tx.wallet.upsert({
-        where: { userId },
-        create: { userId, balanceMinor: 0n },
-        update: {},
-      });
-      const [locked] = await tx.$queryRaw<{ balance_minor: bigint }[]>`
-        SELECT balance_minor FROM wallets WHERE user_id = ${userId}::uuid FOR UPDATE
-      `;
-
-      const current = locked?.balance_minor ?? 0n;
-      if (current + delta < 0n) {
-        throw new BadRequestException("Insufficient funds");
-      }
-
-      const wallet = await tx.wallet.update({
-        where: { userId },
-        data: { balanceMinor: { increment: delta } },
-      });
-
-      const record = await tx.walletTransaction.create({
-        data: {
-          userId,
-          kind,
-          status: "completed",
-          amountMinor: amount,
-          method: dto.method,
-          reference: dto.reference || null,
-          note,
-          completedAt: new Date(),
-        },
-      });
-
-      await tx.notification.create({
-        data: {
-          userId,
-          title: kind === "deposit" ? "Funds added" : "Withdrawal processed",
-          body: this.describe(kind, amount, dto.method, note),
-          href: "/dashboard/wallet",
-        },
-      });
-
-      return { tx: record, balanceMinor: wallet.balanceMinor };
     });
   }
 
