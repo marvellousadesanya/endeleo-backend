@@ -297,6 +297,110 @@ export class WalletService {
     });
   }
 
+  // ---- Bond engine payouts and escrow ---------------------------------------
+  // Used by PaymentAdapter (src/bonds/adapters/payment.adapter.ts) so coupon payments,
+  // principal redemptions and subscription escrow are real wallet movements — not a
+  // mocked provider reference. A coupon/redemption payout lands here rather than going
+  // straight to a bank account because no bank details are ever collected from an
+  // investor up front; it becomes real, spendable, withdrawable money the moment it's
+  // credited, and leaves for a real bank account through the Paystack withdrawal above
+  // whenever the investor chooses.
+
+  /** Coupon and principal payouts, and an escrow refund on a cancelled subscription. */
+  async creditWallet(args: {
+    userId: string;
+    amountMinor: bigint;
+    kind: "payout" | "refund";
+    note: string;
+    reference?: string;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.wallet.upsert({
+        where: { userId: args.userId },
+        create: { userId: args.userId, balanceMinor: 0n },
+        update: {},
+      });
+      const wallet = await tx.wallet.update({
+        where: { userId: args.userId },
+        data: { balanceMinor: { increment: args.amountMinor } },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          userId: args.userId,
+          kind: args.kind,
+          status: "completed",
+          amountMinor: args.amountMinor,
+          method: "bond-engine",
+          reference: args.reference ?? null,
+          note: args.note,
+          completedAt: new Date(),
+        },
+      });
+      await tx.notification.create({
+        data: {
+          userId: args.userId,
+          title: args.kind === "payout" ? "Payout received" : "Refund received",
+          body: `${this.majorAmount(args.amountMinor)} ${
+            args.kind === "payout" ? "credited to your wallet" : "refunded to your wallet"
+          } — ${args.note}.`,
+          href: "/dashboard/wallet",
+        },
+      });
+      return { balanceMinor: wallet.balanceMinor };
+    });
+  }
+
+  /**
+   * The escrow hold behind subscribing to a bond: a real debit against the investor's
+   * own wallet balance, not a no-op. Returns `{ ok: false }` on insufficient funds
+   * rather than throwing — SubscriptionsService already treats a failed hold as an
+   * ordinary rejected subscription, not a server error.
+   */
+  async debitForEscrow(args: { userId: string; amountMinor: bigint; reference: string; note: string }) {
+    const insufficientFunds = Symbol("insufficient-funds");
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.wallet.upsert({
+          where: { userId: args.userId },
+          create: { userId: args.userId, balanceMinor: 0n },
+          update: {},
+        });
+        const [locked] = await tx.$queryRaw<{ balance_minor: bigint }[]>`
+          SELECT balance_minor FROM wallets WHERE user_id = ${args.userId}::uuid FOR UPDATE
+        `;
+        if ((locked?.balance_minor ?? 0n) < args.amountMinor) throw insufficientFunds;
+
+        await tx.wallet.update({
+          where: { userId: args.userId },
+          data: { balanceMinor: { decrement: args.amountMinor } },
+        });
+        await tx.walletTransaction.create({
+          data: {
+            userId: args.userId,
+            kind: "investment",
+            status: "completed",
+            amountMinor: args.amountMinor,
+            method: "bond-engine",
+            reference: args.reference,
+            note: args.note,
+            completedAt: new Date(),
+          },
+        });
+      });
+      return { ok: true };
+    } catch (err) {
+      if (err === insufficientFunds) return { ok: false };
+      throw err;
+    }
+  }
+
+  private majorAmount(amountMinor: bigint): string {
+    return (Number(amountMinor) / 100).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }
+
   private describe(kind: string, amountMinor: bigint, method: string, note: string) {
     const major = (Number(amountMinor) / 100).toLocaleString(undefined, {
       minimumFractionDigits: 2,

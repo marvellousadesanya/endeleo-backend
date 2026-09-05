@@ -47,7 +47,7 @@ export class SubscriptionsService {
       currency: bond.currency,
       reference: `${bond.isinRef}:${user.id.slice(0, 8)}:${Date.now()}`,
     });
-    if (!escrow.ok) throw new BadRequestException("Could not hold funds in escrow");
+    if (!escrow.ok) throw new BadRequestException("Insufficient wallet balance for this subscription");
 
     const subscription = await this.prisma.subscription.create({
       data: {
@@ -104,7 +104,11 @@ export class SubscriptionsService {
 
     if (cancelled?.escrow_reference) {
       try {
-        await this.payments.refundEscrow(cancelled.escrow_reference);
+        await this.payments.refundEscrow({
+          userId: subscription.userId,
+          amountMinor: cancelled.amount_minor,
+          reference: cancelled.escrow_reference,
+        });
         await this.audit.record({
           bondId: cancelled.bond_id, userId: subscription.userId, event: "funds_refunded",
           payload: { subscriptionId, amountMinor: cancelled.amount_minor.toString() },

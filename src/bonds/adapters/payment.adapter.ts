@@ -1,7 +1,13 @@
-// External money rails. Mock today; the interface is what Paystack slots into.
+// Money rail for the bond engine — real now, not mocked, but real in a specific sense:
+// it moves money into and out of an investor's Endeleo wallet (src/wallet/wallet.service.ts),
+// not straight to an external bank account. No path in this engine ever collects an
+// investor's bank details up front, so there is nowhere else for a coupon or principal
+// payout to land; from the wallet, the investor reaches their own bank through the real
+// Paystack withdrawal flow whenever they choose. Subscribing debits the wallet as a
+// real escrow hold — insufficient funds now genuinely blocks a subscription.
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { randomUUID } from "node:crypto";
+import { WalletService } from "@/wallet/wallet.service";
 
 export interface EscrowHold {
   ok: boolean;
@@ -17,14 +23,19 @@ export interface Disbursement {
 /**
  * Fault injection via BOND_ENGINE_MOCK_DISBURSE: "ok" | "fail" | "throw".
  *
- * Needed because Paystack's own test mode reports every transfer as successful, so the
- * retry and escalation paths cannot be exercised against it. Never set in production.
+ * Kept even though disbursement is real now: a wallet credit is a plain DB write and
+ * will "succeed" just as unconditionally as the old mock did, so exercising the retry
+ * and escalation paths still needs a way to force a failure on demand. Never set in
+ * production.
  */
 @Injectable()
 export class PaymentAdapter {
   private readonly logger = new Logger(PaymentAdapter.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly wallet: WalletService,
+  ) {}
 
   private get mode(): "ok" | "fail" | "throw" {
     const m = this.config.get<string>("BOND_ENGINE_MOCK_DISBURSE");
@@ -37,10 +48,27 @@ export class PaymentAdapter {
     currency: string;
     reference: string;
   }): Promise<EscrowHold> {
-    return { ok: true, escrowReference: `mock_esc_${args.reference}` };
+    const result = await this.wallet.debitForEscrow({
+      userId: args.userId,
+      amountMinor: args.amountMinor,
+      reference: args.reference,
+      note: `Subscription hold — ${args.reference}`,
+    });
+    if (!result.ok) return { ok: false, escrowReference: "" };
+    // The same reference threads through to refundEscrow on cancellation and is stored
+    // on Subscription.escrowReference — real now, not a mock_esc_ prefix, but the shape
+    // callers already depend on is unchanged.
+    return { ok: true, escrowReference: args.reference };
   }
 
-  async refundEscrow(_reference: string): Promise<{ ok: boolean }> {
+  async refundEscrow(args: { userId: string; amountMinor: bigint; reference: string }): Promise<{ ok: boolean }> {
+    await this.wallet.creditWallet({
+      userId: args.userId,
+      amountMinor: args.amountMinor,
+      kind: "refund",
+      note: `Subscription cancelled — ${args.reference}`,
+      reference: args.reference,
+    });
     return { ok: true };
   }
 
@@ -55,9 +83,18 @@ export class PaymentAdapter {
         throw new Error("mock rail unreachable");
       case "fail":
         return { ok: false, providerRef: "", error: "provider reported failure" };
-      default:
-        this.logger.debug(`disbursed ${args.amountMinor} ${args.currency} to ${args.userId}`);
-        return { ok: true, providerRef: `mock_pay_${randomUUID()}` };
+      default: {
+        const result = await this.wallet.creditWallet({
+          userId: args.userId,
+          amountMinor: args.amountMinor,
+          kind: "payout",
+          note: args.note,
+        });
+        this.logger.debug(
+          `disbursed ${args.amountMinor} ${args.currency} to ${args.userId} — new wallet balance ${result.balanceMinor}`,
+        );
+        return { ok: true, providerRef: `wallet:${args.userId}` };
+      }
     }
   }
 }
