@@ -4,6 +4,7 @@ import {
 import { FilesInterceptor } from "@nestjs/platform-express";
 import { CurrentUser } from "@/auth/current-user.decorator";
 import { JwtAuthGuard } from "@/auth/jwt-auth.guard";
+import { OptionalJwtAuthGuard } from "@/auth/optional-jwt-auth.guard";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import { CreateSubmissionDto } from "./dto/submissions.dto";
 import { SubmissionsService } from "./submissions.service";
@@ -19,11 +20,21 @@ export class SubmissionsController {
    * Public on purpose — a sponsor can propose a project before they have an account,
    * which is how the marketing funnel feeds this. Files arrive with the form rather
    * than being uploaded separately first.
+   *
+   * OptionalJwtAuthGuard, not no guard at all: the frontend does send a bearer token
+   * when the sponsor is signed in, and without this the submission was previously
+   * always saved with userId null — a signed-in sponsor's own submission then could
+   * never show up under GET /submissions/mine.
    */
   @Post()
+  @UseGuards(OptionalJwtAuthGuard)
   @UseInterceptors(FilesInterceptor("files", MAX_FILES, { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  create(@Body() dto: CreateSubmissionDto, @UploadedFiles() files?: Express.Multer.File[]) {
-    return this.submissions.create(dto, files ?? []);
+  create(
+    @CurrentUser() user: AuthUser | undefined,
+    @Body() dto: CreateSubmissionDto,
+    @UploadedFiles() files?: Express.Multer.File[],
+  ) {
+    return this.submissions.create(dto, files ?? [], user?.id);
   }
 
   @Get("mine")
