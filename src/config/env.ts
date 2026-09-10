@@ -51,10 +51,14 @@ const envSchema = z.object({
   PAYSTACK_SECRET_KEY: z.string().optional(),
 
   // Email alerts (Resend). Optional — unlike Paystack, a missing key never blocks the
-  // action that would have triggered the email; EmailService just logs and skips. Set
-  // both to switch alerts on.
+  // action that would have triggered the email; EmailService just logs and skips.
   RESEND_API_KEY: z.string().optional(),
-  EMAIL_FROM: z.string().default("Endeleo <notifications@endeleo.app>"),
+  // Defaults to Resend's own shared onboarding@resend.dev sender, which works with no
+  // domain setup — fine for now while a production domain isn't picked yet, but it's
+  // rate-limited and lands in spam more often. Switch EMAIL_FROM to an address on a
+  // domain verified at resend.com/domains (endeleo.online, or whatever's chosen)
+  // before this carries real traffic.
+  EMAIL_FROM: z.string().default("Endeleo <onboarding@resend.dev>"),
 });
 
 export type Env = z.infer<typeof envSchema>;
