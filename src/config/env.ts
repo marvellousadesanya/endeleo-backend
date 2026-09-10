@@ -49,6 +49,12 @@ const envSchema = z.object({
   // is no separate webhook secret. Optional so the app boots without it; the deposit
   // endpoints throw a clear 503 if a real request reaches them unconfigured.
   PAYSTACK_SECRET_KEY: z.string().optional(),
+
+  // Email alerts (Resend). Optional — unlike Paystack, a missing key never blocks the
+  // action that would have triggered the email; EmailService just logs and skips. Set
+  // both to switch alerts on.
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default("Endeleo <notifications@endeleo.app>"),
 });
 
 export type Env = z.infer<typeof envSchema>;

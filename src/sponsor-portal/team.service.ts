@@ -9,13 +9,24 @@
 // issuerId. Wiring role-based restrictions into those checks is future work; this module
 // gives sponsors a real, persisted place to manage who's on their team in the meantime.
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
+import { NotificationsService } from "@/notifications/notifications.service";
+import { emailShell } from "@/email/email-templates";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import type { InviteTeamMemberDto, UpdateTeamMemberDto } from "./dto/team.dto";
 
 @Injectable()
 export class TeamService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly frontendUrl: string;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+    config: ConfigService,
+  ) {
+    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+  }
 
   async list(user: AuthUser) {
     const pending = await this.prisma.sponsorTeamMember.findMany({
@@ -47,9 +58,12 @@ export class TeamService {
     if (email === user.email.toLowerCase()) {
       throw new ConflictException("You're already the owner of this team");
     }
-    const matched = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
+    const [matched, owner] = await Promise.all([
+      this.prisma.user.findUnique({ where: { email }, select: { id: true } }),
+      this.prisma.user.findUnique({ where: { id: user.id }, select: { fullName: true } }),
+    ]);
 
-    return this.prisma.sponsorTeamMember.upsert({
+    const invite = await this.prisma.sponsorTeamMember.upsert({
       where: { ownerUserId_invitedEmail: { ownerUserId: user.id, invitedEmail: email } },
       create: {
         ownerUserId: user.id,
@@ -59,6 +73,36 @@ export class TeamService {
       },
       update: { role: dto.role },
     });
+
+    const ownerName = owner?.fullName || user.email;
+    const roleLabel = dto.role === "editor" ? "an editor" : "a viewer";
+    const bodyHtml = `<p><strong>${ownerName}</strong> has invited you as ${roleLabel} on their sponsor team, giving you access to their bonds.</p>`;
+
+    if (matched) {
+      // Writes the in-app row too — they already have an account to see it in.
+      await this.notifications.notify({
+        userId: matched.id,
+        title: "You've joined a sponsor team",
+        body: `${ownerName} added you as ${roleLabel}.`,
+        href: "/sponsor",
+        email: {
+          subject: `${ownerName} invited you to their team`,
+          bodyHtml,
+          ctaLabel: "Open your dashboard",
+          ctaHref: `${this.frontendUrl}/sponsor`,
+        },
+      });
+    } else {
+      const html = emailShell({
+        heading: "You've been invited to a team on Endeleo",
+        bodyHtml,
+        ctaLabel: "Create your account",
+        ctaHref: `${this.frontendUrl}/auth?email=${encodeURIComponent(email)}`,
+      });
+      await this.notifications.emailAddress(email, `${ownerName} invited you to their team on Endeleo`, html);
+    }
+
+    return invite;
   }
 
   async updateRole(user: AuthUser, id: string, dto: UpdateTeamMemberDto) {

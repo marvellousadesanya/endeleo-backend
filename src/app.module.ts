@@ -18,6 +18,8 @@ import { SubmissionsModule } from "@/submissions/submissions.module";
 import { SchedulerModule } from "@/scheduler/scheduler.module";
 import { UsersModule } from "@/users/users.module";
 import { SponsorPortalModule } from "@/sponsor-portal/sponsor-portal.module";
+import { EmailModule } from "@/email/email.module";
+import { NotificationsModule } from "@/notifications/notifications.module";
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { SponsorPortalModule } from "@/sponsor-portal/sponsor-portal.module";
     }),
     ScheduleModule.forRoot(),
     DatabaseModule,
+    EmailModule,
+    NotificationsModule,
     SchedulerModule,
     UsersModule,
     AuditModule,

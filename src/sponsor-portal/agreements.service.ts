@@ -2,17 +2,25 @@
 // uploads and sends one; the sponsor signs it, on the record, same trust model as the
 // investor data room's signature wall.
 import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
 import { StorageService } from "@/storage/storage.service";
+import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import type { SignAgreementDto, UpsertAgreementDto } from "./dto/agreements.dto";
 
 @Injectable()
 export class AgreementsService {
+  private readonly frontendUrl: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
-  ) {}
+    private readonly notifications: NotificationsService,
+    config: ConfigService,
+  ) {
+    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+  }
 
   private async assertOwnsBond(user: AuthUser, bondId: string) {
     if (user.roles.includes("admin")) return;
@@ -53,15 +61,31 @@ export class AgreementsService {
 
   /** Signing sets status straight to signed — there's no separate "countersigned" step. */
   async sign(user: AuthUser, dto: SignAgreementDto) {
-    const doc = await this.prisma.sponsorAgreement.findUnique({ where: { id: dto.id } });
+    const doc = await this.prisma.sponsorAgreement.findUnique({
+      where: { id: dto.id },
+      include: { bond: { select: { title: true } } },
+    });
     if (!doc) throw new NotFoundException("Agreement not found");
     await this.assertOwnsBond(user, doc.bondId);
     if (doc.status === "signed") return doc;
 
-    return this.prisma.sponsorAgreement.update({
+    const signed = await this.prisma.sponsorAgreement.update({
       where: { id: dto.id },
       data: { status: "signed", signedAt: new Date(), signedName: dto.signedName, signedBy: user.id },
     });
+
+    await this.notifications.notify({
+      userId: user.id,
+      title: "Agreement signed",
+      body: `You signed "${doc.title}" on ${doc.bond.title} as ${dto.signedName}.`,
+      href: "/sponsor/agreements",
+      email: {
+        subject: `You signed ${doc.title}`,
+        bodyHtml: `<p>This confirms you signed <strong>"${doc.title}"</strong> on ${doc.bond.title} as <strong>${dto.signedName}</strong> on ${new Date().toLocaleDateString()}. Keep this email for your records.</p>`,
+      },
+    });
+
+    return signed;
   }
 
   async upsert(dto: UpsertAgreementDto, file?: Express.Multer.File) {
@@ -88,11 +112,25 @@ export class AgreementsService {
     if (dto.id) {
       const previous = await this.prisma.sponsorAgreement.findUnique({
         where: { id: dto.id },
-        select: { filePath: true },
+        select: { filePath: true, status: true, bond: { select: { title: true, issuerId: true } } },
       });
       const updated = await this.prisma.sponsorAgreement.update({ where: { id: dto.id }, data: base });
       if (stored && previous?.filePath && previous.filePath !== stored.path) {
         await this.storage.remove(previous.filePath);
+      }
+      if (dto.status === "sent" && previous?.status !== "sent" && previous?.bond) {
+        await this.notifications.notify({
+          userId: previous.bond.issuerId,
+          title: "New agreement to sign",
+          body: `"${updated.title}" on ${previous.bond.title} is ready for your signature.`,
+          href: "/sponsor/agreements",
+          email: {
+            subject: `Please sign: ${updated.title}`,
+            bodyHtml: `<p><strong>${previous.bond.title}</strong> — "${updated.title}" has been sent and is ready for your signature.</p>`,
+            ctaLabel: "Review and sign",
+            ctaHref: `${this.frontendUrl}/sponsor/agreements`,
+          },
+        });
       }
       return updated;
     }

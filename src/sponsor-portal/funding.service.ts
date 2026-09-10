@@ -3,13 +3,29 @@
 // the milestone schedule on top. Sponsors watch; only admin releases a milestone, same
 // as real disbursement always has a controller on the other side of it.
 import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
+import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import type { CreateMilestoneDto, UpdateMilestoneDto } from "./dto/funding.dto";
 
+// Minor units → a plain "1,234,567" string — good enough for an email line; the app's
+// own fmtMinor (currency-aware, client-side) is what the dashboard itself uses.
+function fmtMajor(minor: bigint): string {
+  return (Number(minor) / 100).toLocaleString();
+}
+
 @Injectable()
 export class FundingService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly frontendUrl: string;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+    config: ConfigService,
+  ) {
+    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+  }
 
   private async assertOwnsBond(user: AuthUser, bondId: string) {
     if (user.roles.includes("admin")) return;
@@ -53,11 +69,14 @@ export class FundingService {
   }
 
   async updateMilestone(id: string, dto: UpdateMilestoneDto) {
-    const existing = await this.prisma.fundingMilestone.findUnique({ where: { id } });
+    const existing = await this.prisma.fundingMilestone.findUnique({
+      where: { id },
+      include: { bond: { select: { title: true, issuerId: true, currency: true } } },
+    });
     if (!existing) throw new NotFoundException("Milestone not found");
     const releasing = dto.status === "released" && existing.status !== "released";
 
-    return this.prisma.fundingMilestone.update({
+    const updated = await this.prisma.fundingMilestone.update({
       where: { id },
       data: {
         label: dto.label,
@@ -68,6 +87,23 @@ export class FundingService {
         ...(releasing ? { releasedAt: new Date() } : {}),
       },
     });
+
+    if (releasing) {
+      await this.notifications.notify({
+        userId: existing.bond.issuerId,
+        title: "Funding milestone released",
+        body: `${existing.bond.currency} ${fmtMajor(updated.targetMinor)} for "${updated.label}" on ${existing.bond.title} has been released.`,
+        href: "/sponsor/funding",
+        email: {
+          subject: `Released: ${updated.label}`,
+          bodyHtml: `<p><strong>${existing.bond.title}</strong> — <strong>${existing.bond.currency} ${fmtMajor(updated.targetMinor)}</strong> for "${updated.label}" has been released.</p>`,
+          ctaLabel: "View funding",
+          ctaHref: `${this.frontendUrl}/sponsor/funding`,
+        },
+      });
+    }
+
+    return updated;
   }
 
   listForAdmin(bondId?: string) {

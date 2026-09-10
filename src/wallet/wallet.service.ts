@@ -11,6 +11,8 @@ import {
 import { ConfigService } from "@nestjs/config";
 import type { Prisma } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
+import { EmailService } from "@/email/email.service";
+import { emailShell } from "@/email/email-templates";
 import { PaystackService } from "./paystack.service";
 
 @Injectable()
@@ -19,7 +21,23 @@ export class WalletService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly paystack: PaystackService,
+    private readonly emailSvc: EmailService,
   ) {}
+
+  /**
+   * Fired after — never inside — a money-moving transaction: an email is a network
+   * call, and the transaction above has already committed the state that matters by
+   * the time this runs. Best-effort; EmailService itself never throws.
+   */
+  private async emailUser(userId: string, subject: string, bodyHtml: string, cta?: { label: string; href: string }) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user) return;
+    await this.emailSvc.send(
+      user.email,
+      subject,
+      emailShell({ heading: subject, bodyHtml, ctaLabel: cta?.label, ctaHref: cta?.href }),
+    );
+  }
 
   /** A wallet row is created on first use, so accounts predating this module work. */
   async findForUser(userId: string) {
@@ -106,7 +124,7 @@ export class WalletService {
    * is no longer "pending" and returns without crediting twice.
    */
   async confirmPaystackDeposit(reference: string, result: { status: string; amountMinor: bigint }) {
-    return this.prisma.$transaction(async (tx) => {
+    const outcome = await this.prisma.$transaction(async (tx) => {
       const [locked] = await tx.$queryRaw<
         { id: string; user_id: string; amount_minor: bigint; status: string }[]
       >`
@@ -116,12 +134,18 @@ export class WalletService {
       `;
       if (!locked) throw new NotFoundException("Deposit not found");
       if (locked.status !== "pending") {
-        return { alreadyProcessed: true, status: locked.status };
+        return {
+          alreadyProcessed: true, status: locked.status,
+          userId: locked.user_id, amountMinor: locked.amount_minor,
+        };
       }
 
       if (result.status !== "success") {
         await tx.walletTransaction.update({ where: { id: locked.id }, data: { status: "failed" } });
-        return { alreadyProcessed: false, status: "failed" };
+        return {
+          alreadyProcessed: false, status: "failed",
+          userId: locked.user_id, amountMinor: locked.amount_minor,
+        };
       }
       if (result.amountMinor !== locked.amount_minor) {
         // Paid a different amount than requested — never credit blindly.
@@ -151,8 +175,20 @@ export class WalletService {
         },
       });
 
-      return { alreadyProcessed: false, status: "completed", balanceMinor: wallet.balanceMinor };
+      return {
+        alreadyProcessed: false, status: "completed", balanceMinor: wallet.balanceMinor,
+        userId: locked.user_id, amountMinor: locked.amount_minor,
+      };
     });
+
+    if (outcome.status === "completed" && !outcome.alreadyProcessed) {
+      await this.emailUser(
+        outcome.userId, "Funds added",
+        `<p>${this.describe("deposit", outcome.amountMinor, "Paystack", "Wallet top-up")}</p>`,
+        { label: "View wallet", href: `${this.config.get<string>("FRONTEND_URL")}/dashboard/wallet` },
+      );
+    }
+    return outcome;
   }
 
   // ---- Paystack withdrawals ---------------------------------------------------
@@ -250,7 +286,7 @@ export class WalletService {
    * commits, then sees the row is no longer "pending" and no-ops.
    */
   async confirmPaystackWithdrawal(reference: string, status: "success" | "failed") {
-    return this.prisma.$transaction(async (tx) => {
+    const outcome = await this.prisma.$transaction(async (tx) => {
       const [locked] = await tx.$queryRaw<
         { id: string; user_id: string; amount_minor: bigint; status: string }[]
       >`
@@ -260,7 +296,10 @@ export class WalletService {
       `;
       if (!locked) throw new NotFoundException("Withdrawal not found");
       if (locked.status !== "pending") {
-        return { alreadyProcessed: true, status: locked.status };
+        return {
+          alreadyProcessed: true, status: locked.status,
+          userId: locked.user_id, amountMinor: locked.amount_minor,
+        };
       }
 
       if (status === "success") {
@@ -276,7 +315,10 @@ export class WalletService {
             href: "/dashboard/wallet",
           },
         });
-        return { alreadyProcessed: false, status: "completed" };
+        return {
+          alreadyProcessed: false, status: "completed" as const,
+          userId: locked.user_id, amountMinor: locked.amount_minor,
+        };
       }
 
       // Failed or reversed — give the reserved funds back.
@@ -293,8 +335,29 @@ export class WalletService {
           href: "/dashboard/wallet",
         },
       });
-      return { alreadyProcessed: false, status: "failed" };
+      return {
+        alreadyProcessed: false, status: "failed" as const,
+        userId: locked.user_id, amountMinor: locked.amount_minor,
+      };
     });
+
+    if (!outcome.alreadyProcessed) {
+      const frontendUrl = this.config.get<string>("FRONTEND_URL");
+      if (outcome.status === "completed") {
+        await this.emailUser(
+          outcome.userId, "Withdrawal sent",
+          `<p>${this.describe("withdrawal", outcome.amountMinor, "Paystack", "your bank account")}</p>`,
+          { label: "View wallet", href: `${frontendUrl}/dashboard/wallet` },
+        );
+      } else {
+        await this.emailUser(
+          outcome.userId, "Withdrawal failed",
+          `<p>Your withdrawal of ₦${this.majorAmount(outcome.amountMinor)} could not be completed. The funds have been returned to your wallet.</p>`,
+          { label: "View wallet", href: `${frontendUrl}/dashboard/wallet` },
+        );
+      }
+    }
+    return outcome;
   }
 
   // ---- Bond engine payouts and escrow ---------------------------------------
@@ -314,7 +377,7 @@ export class WalletService {
     note: string;
     reference?: string;
   }) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.wallet.upsert({
         where: { userId: args.userId },
         create: { userId: args.userId, balanceMinor: 0n },
@@ -348,6 +411,16 @@ export class WalletService {
       });
       return { balanceMinor: wallet.balanceMinor };
     });
+
+    await this.emailUser(
+      args.userId,
+      args.kind === "payout" ? "Payout received" : "Refund received",
+      `<p>₦${this.majorAmount(args.amountMinor)} ${
+        args.kind === "payout" ? "has been credited to your wallet" : "has been refunded to your wallet"
+      } — ${args.note}.</p>`,
+      { label: "View wallet", href: `${this.config.get<string>("FRONTEND_URL")}/dashboard/wallet` },
+    );
+    return result;
   }
 
   /**

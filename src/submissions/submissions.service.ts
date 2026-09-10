@@ -4,10 +4,13 @@
 // account, which is how the marketing funnel works. Reading submissions back is not,
 // and is scoped to the signed-in submitter.
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { Prisma, SubmissionStatus } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { StorageService } from "@/storage/storage.service";
 import { BondsService } from "@/bonds/bonds.service";
+import { NotificationsService } from "@/notifications/notifications.service";
+import { emailShell } from "@/email/email-templates";
 import type { CreateBondDto } from "@/bonds/dto/bonds.dto";
 import type { CreateSubmissionDto, PromoteSubmissionDto, ReviewSubmissionDto } from "./dto/submissions.dto";
 
@@ -21,11 +24,17 @@ interface StoredAttachment {
 
 @Injectable()
 export class SubmissionsService {
+  private readonly frontendUrl: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly bonds: BondsService,
-  ) {}
+    private readonly notifications: NotificationsService,
+    config: ConfigService,
+  ) {
+    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+  }
 
   /** Adds the resolved public cover URL; the stored path itself is never exposed. */
   private withCoverUrl<T extends { coverImagePath: string | null }>(submission: T) {
@@ -163,7 +172,63 @@ export class SubmissionsService {
         reviewedAt: new Date(),
       },
     });
+
+    if (dto.status !== submission.status) {
+      await this.notifyReviewStatus(updated);
+    }
     return this.withCoverUrl(updated);
+  }
+
+  /**
+   * Emails the submitter directly — not through NotificationsService's userId lookup,
+   * because a submission can be anonymous (no account) and its contact email may not
+   * even match one if there is an account. The in-app row still only fires when there's
+   * a real user to show it to.
+   */
+  private async notifyReviewStatus(submission: {
+    id: string; userId: string | null; projectTitle: string; submitterEmail: string | null;
+    submitterName: string | null; status: SubmissionStatus; reviewerNotes: string | null;
+  }) {
+    if (!submission.submitterEmail) return;
+    const copy: Record<string, { heading: string; body: string } | undefined> = {
+      in_review: {
+        heading: "Your submission is under review",
+        body: `<p>Our origination team has started reviewing <strong>${submission.projectTitle}</strong>.</p>`,
+      },
+      approved: {
+        heading: "Your submission was approved",
+        body: `<p>Good news — <strong>${submission.projectTitle}</strong> has been approved. Our team will be in touch about next steps.</p>`,
+      },
+      rejected: {
+        heading: "An update on your submission",
+        body: `<p><strong>${submission.projectTitle}</strong> was not approved at this time.</p>${
+          submission.reviewerNotes
+            ? `<p style="color:#4a5049;background:#f5f6f4;border-radius:8px;padding:10px 14px;">${submission.reviewerNotes}</p>`
+            : ""
+        }`,
+      },
+    };
+    const entry = copy[submission.status];
+    if (!entry) return;
+
+    const html = emailShell({
+      heading: entry.heading,
+      bodyHtml: entry.body,
+      ctaLabel: "View status tracker",
+      ctaHref: `${this.frontendUrl}/sponsor/projects`,
+    });
+    await this.notifications.emailAddress(submission.submitterEmail, entry.heading, html);
+
+    if (submission.userId) {
+      await this.prisma.notification.create({
+        data: {
+          userId: submission.userId,
+          title: entry.heading,
+          body: submission.projectTitle,
+          href: "/sponsor/projects",
+        },
+      });
+    }
   }
 
   /**
@@ -227,6 +292,27 @@ export class SubmissionsService {
       where: { id },
       data: { status: "promoted", bondId: bond.id, reviewedAt: new Date() },
     });
+
+    if (submission.submitterEmail) {
+      const html = emailShell({
+        heading: "Your project is now live",
+        bodyHtml: `<p><strong>${submission.projectTitle}</strong> has been promoted to a bond and is now on the Endeleo platform.</p>`,
+        ctaLabel: "View your bond",
+        ctaHref: `${this.frontendUrl}/sponsor/documents`,
+      });
+      await this.notifications.emailAddress(submission.submitterEmail, "Your project is now live on Endeleo", html);
+    }
+    if (submission.userId) {
+      await this.prisma.notification.create({
+        data: {
+          userId: submission.userId,
+          title: "Your project is now live",
+          body: `${submission.projectTitle} has been promoted to a bond.`,
+          href: "/sponsor/documents",
+        },
+      });
+    }
+
     return bond;
   }
 }

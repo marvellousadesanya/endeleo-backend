@@ -2,7 +2,9 @@
 // different `kind` and grouping. Admin seeds the items for a bond; the sponsor moves
 // their own items forward (in_progress → submitted); only admin can verify or reject.
 import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
+import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import type {
   AdminUpdateChecklistItemDto,
@@ -12,7 +14,15 @@ import type {
 
 @Injectable()
 export class ChecklistService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly frontendUrl: string;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+    config: ConfigService,
+  ) {
+    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+  }
 
   private async assertOwnsBond(user: AuthUser, bondId: string) {
     if (user.roles.includes("admin")) return;
@@ -65,10 +75,13 @@ export class ChecklistService {
   }
 
   async updateAsAdmin(id: string, dto: AdminUpdateChecklistItemDto, adminId: string) {
-    const item = await this.prisma.sponsorChecklistItem.findUnique({ where: { id } });
+    const item = await this.prisma.sponsorChecklistItem.findUnique({
+      where: { id },
+      include: { bond: { select: { title: true, issuerId: true } } },
+    });
     if (!item) throw new NotFoundException("Checklist item not found");
     const verifying = dto.status === "verified" || dto.status === "rejected";
-    return this.prisma.sponsorChecklistItem.update({
+    const updated = await this.prisma.sponsorChecklistItem.update({
       where: { id },
       data: {
         status: dto.status,
@@ -78,6 +91,38 @@ export class ChecklistService {
         ...(verifying ? { verifiedBy: adminId, verifiedAt: new Date() } : {}),
       },
     });
+
+    if (dto.status === "verified") {
+      const kindLabel = item.kind === "compliance" ? "Compliance" : "Due diligence";
+      await this.notifications.notify({
+        userId: item.bond.issuerId,
+        title: `${kindLabel} item verified`,
+        body: `"${item.label}" on ${item.bond.title} has been verified.`,
+        href: `/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`,
+        email: {
+          subject: `Verified: ${item.label}`,
+          bodyHtml: `<p><strong>${item.bond.title}</strong> — "${item.label}" has been verified. No further action needed on this item.</p>`,
+          ctaLabel: "View checklist",
+          ctaHref: `${this.frontendUrl}/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`,
+        },
+      });
+    } else if (dto.status === "rejected") {
+      const kindLabel = item.kind === "compliance" ? "Compliance" : "Due diligence";
+      await this.notifications.notify({
+        userId: item.bond.issuerId,
+        title: `${kindLabel} item needs attention`,
+        body: `"${item.label}" on ${item.bond.title} was rejected${dto.notes ? `: ${dto.notes}` : "."}`,
+        href: `/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`,
+        email: {
+          subject: `Action needed: ${item.label}`,
+          bodyHtml: `<p><strong>${item.bond.title}</strong> — "${item.label}" was rejected and needs another look.</p>${dto.notes ? `<p style="color:#8a4b1c;background:#fdf3e7;border-radius:8px;padding:10px 14px;">${dto.notes}</p>` : ""}`,
+          ctaLabel: "Review and resubmit",
+          ctaHref: `${this.frontendUrl}/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`,
+        },
+      });
+    }
+
+    return updated;
   }
 
   async deleteItem(id: string) {
