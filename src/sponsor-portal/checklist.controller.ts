@@ -41,6 +41,12 @@ export class ChecklistController {
     return this.checklist.listForAdmin(bondId, kind);
   }
 
+  @Get("admin/sponsor-portal/checklist/completeness")
+  @Roles("admin")
+  completeness(@Query("bondId", ParseUUIDPipe) bondId: string) {
+    return this.checklist.completeness(bondId);
+  }
+
   @Post("admin/sponsor-portal/checklist")
   @Roles("admin")
   create(@Body() dto: CreateChecklistItemDto) {

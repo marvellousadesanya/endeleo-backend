@@ -46,6 +46,35 @@ export class ChecklistService {
     });
   }
 
+  /**
+   * M6's "Completeness Checker" — how much of a bond's compliance and due-diligence
+   * set (the SEC filing items included, since M6 extended this same list rather than
+   * keeping a separate one) is actually verified, and which labels are still
+   * outstanding. No NLP query prediction, no cross-reference validation against a
+   * Trust Deed — just a count, same as everything else built deterministic-first.
+   */
+  async completeness(bondId: string) {
+    const items = await this.prisma.sponsorChecklistItem.findMany({
+      where: { bondId },
+      orderBy: [{ kind: "asc" }, { sortOrder: "asc" }],
+      select: { kind: true, area: true, label: true, status: true },
+    });
+
+    const total = items.length;
+    const verified = items.filter((i) => i.status === "verified").length;
+    const outstanding = items
+      .filter((i) => i.status !== "verified")
+      .map((i) => ({ kind: i.kind, area: i.area, label: i.label, status: i.status }));
+
+    return {
+      bondId,
+      total,
+      verified,
+      completionPct: total === 0 ? 0 : Math.round((verified / total) * 1000) / 10,
+      outstanding,
+    };
+  }
+
   createItem(dto: CreateChecklistItemDto) {
     return this.prisma.sponsorChecklistItem.create({
       data: {

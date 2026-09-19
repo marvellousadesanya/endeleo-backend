@@ -91,12 +91,21 @@ export class BondsService {
     const dueDiligence: { area: string; label: string }[] = [
       { area: "Corporate", label: "Certificate of incorporation" },
       { area: "Corporate", label: "Memorandum & articles of association" },
+      { area: "Corporate", label: "Board resolution authorising the bond issuance" },
       { area: "Financial", label: "Audited financial statements (3 years)" },
       { area: "Financial", label: "Management accounts (latest quarter)" },
       { area: "Technical", label: "Feasibility / technical study" },
       { area: "Legal", label: "Title / land documents" },
       { area: "Legal", label: "Material contracts" },
+      { area: "Legal", label: "Legal opinion from qualified capital markets counsel" },
       { area: "ESG", label: "Environmental & social impact assessment" },
+      // M6 — the SEC Nigeria filing package. See docs/bond-arrangement-engine spec for
+      // the full list this is drawn from; Trust Deed is tracked separately as a
+      // SponsorAgreement, not here.
+      { area: "Regulatory", label: "SEC Form 2 (Offer for Subscription)" },
+      { area: "Regulatory", label: "Information Memorandum (draft, pending legal sign-off)" },
+      { area: "Regulatory", label: "Directors' particulars and fit-and-proper declarations" },
+      { area: "Regulatory", label: "Application for listing (FMDQ / NSE)" },
     ];
 
     await this.prisma.sponsorChecklistItem.createMany({
