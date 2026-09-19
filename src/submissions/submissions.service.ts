@@ -22,6 +22,48 @@ interface StoredAttachment {
   sizeBytes: number;
 }
 
+const MIN_CASHFLOW_YEAR = 2000;
+const MAX_CASHFLOW_YEAR = 2100;
+const MINOR_UNITS_RE = /^\d{1,19}$/;
+
+/**
+ * Parses the multipart form's JSON-string cashflows field into rows ready for a
+ * nested create. Throws with a message naming the offending year, since "cashflows
+ * is invalid" is not enough for a sponsor filling in a multi-year form to act on.
+ */
+export function parseCashflows(raw: string | undefined): { year: number; revenueMinor: bigint; opexMinor: bigint }[] {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new BadRequestException("cashflows must be a JSON array");
+  }
+  if (!Array.isArray(parsed)) throw new BadRequestException("cashflows must be a JSON array");
+
+  const years = new Set<number>();
+  return parsed.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw new BadRequestException(`cashflows[${index}] must be an object`);
+    }
+    const { year, revenueMinor, opexMinor } = entry as Record<string, unknown>;
+    if (typeof year !== "number" || !Number.isInteger(year) || year < MIN_CASHFLOW_YEAR || year > MAX_CASHFLOW_YEAR) {
+      throw new BadRequestException(`cashflows[${index}].year must be an integer between ${MIN_CASHFLOW_YEAR} and ${MAX_CASHFLOW_YEAR}`);
+    }
+    if (years.has(year)) throw new BadRequestException(`cashflows has more than one entry for year ${year}`);
+    years.add(year);
+
+    if (typeof revenueMinor !== "string" || !MINOR_UNITS_RE.test(revenueMinor)) {
+      throw new BadRequestException(`cashflows[${index}].revenueMinor must be minor units as a string`);
+    }
+    if (typeof opexMinor !== "string" || !MINOR_UNITS_RE.test(opexMinor)) {
+      throw new BadRequestException(`cashflows[${index}].opexMinor must be minor units as a string`);
+    }
+
+    return { year, revenueMinor: BigInt(revenueMinor), opexMinor: BigInt(opexMinor) };
+  });
+}
+
 @Injectable()
 export class SubmissionsService {
   private readonly frontendUrl: string;
@@ -51,6 +93,10 @@ export class SubmissionsService {
     userId?: string,
     coverFile?: Express.Multer.File,
   ) {
+    // Validated first, before any storage writes: a malformed cashflow entry should
+    // fail without leaving uploaded bytes to clean up.
+    const cashflows = parseCashflows(dto.cashflows);
+
     const attachments: StoredAttachment[] = [];
     for (const file of files) {
       const stored = await this.storage.put(
@@ -102,8 +148,16 @@ export class SubmissionsService {
           submitterPhone: dto.submitterPhone || null,
           submitterType: dto.submitterType,
           role: dto.role || null,
+          revenueModel: dto.revenueModel ?? null,
+          offtakeAgreementInPlace: dto.offtakeAgreementInPlace ?? null,
+          priorDfiFunding: dto.priorDfiFunding ?? null,
+          ongoingLitigation: dto.ongoingLitigation ?? null,
+          priorDefault: dto.priorDefault ?? null,
+          useOfProceedsDetail: dto.useOfProceedsDetail || null,
           status: "submitted",
+          cashflows: { create: cashflows },
         },
+        include: { cashflows: { orderBy: { year: "asc" } } },
       });
       return this.withCoverUrl(created);
     } catch (err) {
@@ -134,7 +188,10 @@ export class SubmissionsService {
 
   /** Raw row, coverImagePath intact — for internal use (review, promote) only. */
   private async findRaw(id: string) {
-    const submission = await this.prisma.projectSubmission.findUnique({ where: { id } });
+    const submission = await this.prisma.projectSubmission.findUnique({
+      where: { id },
+      include: { cashflows: { orderBy: { year: "asc" } } },
+    });
     if (!submission) throw new NotFoundException("Submission not found");
     return submission;
   }

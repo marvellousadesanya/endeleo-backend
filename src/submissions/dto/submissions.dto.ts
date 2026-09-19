@@ -1,11 +1,15 @@
 import { Transform } from "class-transformer";
 import {
-  IsEmail, IsEnum, IsInt, IsOptional, IsString, Length, Matches, Max, MaxLength, Min,
+  IsBoolean, IsEmail, IsEnum, IsInt, IsOptional, IsString, Length, Matches, Max, MaxLength, Min,
 } from "class-validator";
 
 /** Multipart sends everything as strings, so numeric fields need coercing. */
 const toInt = () => Transform(({ value }) =>
   value === undefined || value === "" ? undefined : Number(value));
+
+/** Multipart sends booleans as the strings "true"/"false". */
+const toBool = () => Transform(({ value }) =>
+  value === undefined || value === "" ? undefined : value === true || value === "true");
 
 export class CreateSubmissionDto {
   @IsString() @Length(2, 120) submitterName!: string;
@@ -35,6 +39,25 @@ export class CreateSubmissionDto {
   @IsOptional() @IsString() @MaxLength(255) websiteUrl?: string;
   /** JSON array of { label, url }, sent as a string by the multipart form. */
   @IsOptional() @IsString() @MaxLength(4000) additionalLinks?: string;
+
+  // ---- M2 self-assessment — feeds the DSCR calculation and bankability scorecard --
+
+  @IsOptional() @IsEnum(["tariff", "offtake", "government_payment", "user_fee", "other"])
+  revenueModel?: "tariff" | "offtake" | "government_payment" | "user_fee" | "other";
+
+  @IsOptional() @toBool() @IsBoolean() offtakeAgreementInPlace?: boolean;
+  @IsOptional() @toBool() @IsBoolean() priorDfiFunding?: boolean;
+  @IsOptional() @toBool() @IsBoolean() ongoingLitigation?: boolean;
+  @IsOptional() @toBool() @IsBoolean() priorDefault?: boolean;
+  @IsOptional() @IsString() @MaxLength(2000) useOfProceedsDetail?: string;
+
+  /**
+   * JSON array of { year, revenueMinor, opexMinor }, sent as a string by the
+   * multipart form — same convention as additionalLinks. Structural validation
+   * happens in the service, not here, because a malformed entry should fail with a
+   * message pointing at which year is wrong.
+   */
+  @IsOptional() @IsString() @MaxLength(8000) cashflows?: string;
 }
 
 /** Moves a submission through review. Promoting it is a separate, dedicated step. */
