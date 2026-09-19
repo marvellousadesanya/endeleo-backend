@@ -50,6 +50,19 @@ enum SubmissionStatus {
   @@map("submission_status")
 }
 
+/// How the project actually earns the money that services the bond. Feeds the M2
+/// feasibility scorecard: a government_payment or offtake deal with a signed
+/// agreement is lower-risk than user_fee revenue with none.
+enum RevenueModel {
+  tariff
+  offtake
+  government_payment
+  user_fee
+  other
+
+  @@map("revenue_model")
+}
+
 enum KycStatus {
   none
   pending
@@ -597,13 +610,36 @@ model BondAuditEntry {
   userId    String?  @map("user_id") @db.Uuid
   event     String
   payload   Json     @default("{}")
+  /// Written by the bond_audit_log_chain trigger, never by the app: prevHash is the
+  /// chain's last eventHash at insert time, eventHash is sha256(prevHash || this row).
+  /// Tampering with an old row breaks the chain from that point forward — see the
+  /// "audit_log_hash_chain" migration.
+  prevHash  String   @default("") @map("prev_hash")
+  eventHash String   @default("") @map("event_hash")
   createdAt DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
 
-  bond Bond? @relation(fields: [bondId], references: [id], onDelete: SetNull)
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Both Restrict, not SetNull: nulling these columns is an UPDATE, which the
+  /// append-only trigger blocks — so a SetNull cascade could never actually fire, and
+  /// deleting a bond or user failed with a confusing "append-only" error from the
+  /// trigger instead of an honest foreign-key one. Anything with audit history is a
+  /// permanent record; the constraint now says so instead of leaving it to be
+  /// discovered. (Erasing a user for data-protection reasons would mean pseudonymising
+  /// the audit log, which needs a deliberate exception to that trigger — a decision to
+  /// take on purpose, not a cascade to stumble into.)
+  bond Bond? @relation(fields: [bondId], references: [id], onDelete: Restrict)
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([bondId, createdAt])
   @@map("bond_audit_log")
+}
+
+/// Singleton row the chain trigger locks (FOR UPDATE) to serialise hash chaining
+/// across concurrent inserts into bond_audit_log. Never read or written by the app.
+model AuditChainHead {
+  id       Int    @id @default(1) @db.SmallInt
+  lastHash String @default("") @map("last_hash")
+
+  @@map("audit_chain_head")
 }
 
 /// Everything about a person that is not their identity or their credentials.
@@ -855,6 +891,17 @@ model ProjectSubmission {
   submitterPhone       String?        @map("submitter_phone")
   submitterType        SubmitterType? @map("submitter_type")
   role                 String?
+
+  /// The M2 self-assessment questionnaire. Small, fixed set of fields — kept flat on
+  /// the submission rather than in its own table, unlike cashflows below which are
+  /// genuinely one-to-many.
+  revenueModel            RevenueModel? @map("revenue_model")
+  offtakeAgreementInPlace Boolean?      @map("offtake_agreement_in_place")
+  priorDfiFunding         Boolean?      @map("prior_dfi_funding")
+  ongoingLitigation       Boolean?      @map("ongoing_litigation")
+  priorDefault            Boolean?      @map("prior_default")
+  useOfProceedsDetail     String?       @map("use_of_proceeds_detail")
+
   status               SubmissionStatus @default(submitted)
   reviewerNotes        String?          @map("reviewer_notes")
   /// Set when status moves out of "submitted" — an admin looked at it.
@@ -869,9 +916,28 @@ model ProjectSubmission {
   bondId String? @unique @map("bond_id") @db.Uuid
   bond   Bond?   @relation(fields: [bondId], references: [id], onDelete: SetNull)
 
+  cashflows SubmissionCashflow[]
+
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@map("project_submissions")
+}
+
+/// One year of a submission's projected cashflow. Year-by-year rather than a JSON
+/// blob so the DSCR calculator can query and order by year directly.
+model SubmissionCashflow {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submissionId String   @map("submission_id") @db.Uuid
+  year         Int
+  revenueMinor BigInt   @map("revenue_minor")
+  opexMinor    BigInt   @map("opex_minor")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  submission ProjectSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@unique([submissionId, year])
+  @@map("submission_cashflows")
 }
 
 /// Investor intake form. Arrives from the marketing site, reviewed by an admin.
