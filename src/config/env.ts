@@ -59,6 +59,12 @@ const envSchema = z.object({
   // domain verified at resend.com/domains (endeleo.online, or whatever's chosen)
   // before this carries real traffic.
   EMAIL_FROM: z.string().default("Endeleo <onboarding@resend.dev>"),
+
+  // M5 pricing screen's benchmark, in basis points over which a spread is quoted.
+  // A manually-updated placeholder standing in for a live FGN bond yield feed (FMDQ) —
+  // there is no such feed wired up yet. Update this by hand as the benchmark moves;
+  // replace it with a real feed before any coupon recommendation leaves the building.
+  ARRANGEMENT_BENCHMARK_BPS: z.coerce.number().int().positive().default(1800),
 });
 
 export type Env = z.infer<typeof envSchema>;

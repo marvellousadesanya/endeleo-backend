@@ -7,6 +7,7 @@ import {
 import type { SubmissionStatus } from "@prisma/client";
 import { JwtAuthGuard } from "@/auth/jwt-auth.guard";
 import { Roles, RolesGuard } from "@/auth/roles.guard";
+import { ArrangementService } from "./arrangement/arrangement.service";
 import { PromoteSubmissionDto, ReviewSubmissionDto } from "./dto/submissions.dto";
 import { SubmissionsService } from "./submissions.service";
 
@@ -14,7 +15,10 @@ import { SubmissionsService } from "./submissions.service";
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles("admin")
 export class SubmissionsAdminController {
-  constructor(private readonly submissions: SubmissionsService) {}
+  constructor(
+    private readonly submissions: SubmissionsService,
+    private readonly arrangementService: ArrangementService,
+  ) {}
 
   @Get()
   list(@Query("status") status?: SubmissionStatus) {
@@ -24,6 +28,16 @@ export class SubmissionsAdminController {
   @Get(":id")
   findOne(@Param("id", ParseUUIDPipe) id: string) {
     return this.submissions.findOne(id);
+  }
+
+  /**
+   * The M2/M3/M5 arrangement screen — DSCR table, bankability score, and rule-based
+   * structuring and pricing recommendations. Computed live, not stored; see
+   * ArrangementService for why.
+   */
+  @Get(":id/arrangement")
+  arrangement(@Param("id", ParseUUIDPipe) id: string) {
+    return this.arrangementService.computeFor(id);
   }
 
   @Get(":id/attachments/:index/download")
