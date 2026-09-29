@@ -35,8 +35,15 @@ export interface AiOpinion {
 }
 
 const MODEL = "claude-sonnet-5";
-/** Long enough for a paragraph of reasoning, short enough to stay quick. */
-const MAX_TOKENS = 900;
+/**
+ * Headroom for the whole JSON object, not just the prose.
+ *
+ * Set to 900 first, and every reply came back stop_reason=max_tokens — cut mid-object,
+ * so the JSON would not parse and all three modules silently fell back. The prompt now
+ * bounds the rationale as well; this is the ceiling that stops a long one truncating
+ * rather than the thing keeping replies short.
+ */
+const MAX_TOKENS = 2000;
 
 @Injectable()
 export class ArrangementAiService {
@@ -45,7 +52,7 @@ export class ArrangementAiService {
 
   constructor(private readonly config: ConfigService) {
     const key = config.get<string>("ANTHROPIC_API_KEY");
-    const enabled = config.get<string>("ARRANGEMENT_AI_ENABLED") === "true";
+    const enabled = config.get<boolean>("ARRANGEMENT_AI_ENABLED") === true;
     this.client = enabled && key ? new Anthropic({ apiKey: key }) : null;
     if (!this.client) {
       this.logger.log(
@@ -56,6 +63,11 @@ export class ArrangementAiService {
 
   get enabled(): boolean {
     return this.client !== null;
+  }
+
+  /** Recorded against each stored opinion, so it can be read in light of what produced it. */
+  get modelName(): string {
+    return MODEL;
   }
 
   /**
@@ -101,7 +113,19 @@ export class ArrangementAiService {
         .map((b) => b.text)
         .join("");
 
-      return parseOpinion(text);
+      const opinion = parseOpinion(text);
+      if (!opinion) {
+        // A reply that arrived but could not be read is a different problem from a call
+        // that failed, and silently returning null for both makes the two impossible to
+        // tell apart from the outside. stop_reason is the usual culprit: a rationale that
+        // runs past max_tokens is cut mid-JSON.
+        this.logger.warn(
+          `AI reply for ${args.module} was unusable ` +
+            `(stop_reason=${response.stop_reason}, ${text.length} chars): ` +
+            text.slice(0, 300).replace(/\s+/g, " "),
+        );
+      }
+      return opinion;
     } catch (err) {
       // Logged, not thrown: the caller has a deterministic answer to fall back to.
       this.logger.error(`AI opinion for ${args.module} failed: ${String(err)}`);
@@ -130,6 +154,10 @@ const SYSTEM_PROMPT = [
   "",
   "Reply with a single JSON object and nothing else — no prose before or after, no code",
   "fences.",
+  "",
+  "Keep it tight enough to fit in one reply: `rationale` under 120 words, `verdict` a",
+  "single line, and at most four `flags` of one sentence each. A reply that runs long is",
+  "truncated mid-object and discarded, so length costs you the whole answer.",
 ].join("\n");
 
 /** Tolerant of a model that wraps its JSON in prose or a fence, strict about the shape. */

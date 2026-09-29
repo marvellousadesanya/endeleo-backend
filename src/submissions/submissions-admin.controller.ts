@@ -57,6 +57,16 @@ export class SubmissionsAdminController {
     return this.submissions.review(id, dto);
   }
 
+  /**
+   * The AI layer's opinions, computed on demand and stored against this version of the
+   * deal. Separate from the arrangement screen on purpose: three model calls added ~13
+   * seconds to opening a submission, so the screen renders first and this arrives after.
+   */
+  @Get(":id/arrangement/ai")
+  arrangementAi(@Param("id", ParseUUIDPipe) id: string) {
+    return this.arrangementService.aiOpinionsFor(id);
+  }
+
   /** Which stages of this deal have been signed off, and by whom. */
   @Get(":id/approvals")
   approvals(@Param("id", ParseUUIDPipe) id: string) {

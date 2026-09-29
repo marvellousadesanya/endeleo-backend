@@ -65,6 +65,20 @@ const envSchema = z.object({
   // there is no such feed wired up yet. Update this by hand as the benchmark moves;
   // replace it with a real feed before any coupon recommendation leaves the building.
   ARRANGEMENT_BENCHMARK_BPS: z.coerce.number().int().positive().default(1800),
+
+  // The AI layer behind M2/M3/M5. Both are needed: a key alone does not switch it on, so
+  // a key present for some other purpose cannot start billing against every submission
+  // anyone opens.
+  //
+  // These have to be declared here or they do not exist. validateEnv returns the parsed
+  // object, and zod drops keys the schema does not name — so a variable read through
+  // ConfigService but missing from this file is silently undefined, however correctly it
+  // is set in .env.
+  ARRANGEMENT_AI_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  ANTHROPIC_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
