@@ -15,6 +15,7 @@ import { PrismaService } from "@/database/prisma.service";
 import { UsersService, type UserWithRoles } from "@/users/users.service";
 import { EmailService } from "@/email/email.service";
 import { sendWelcomeEmail } from "./auth-emails";
+import { deviceSignature, isUnrecognisedDevice, signInAlertEmail } from "./sign-in-alert";
 import { MfaService } from "./mfa/mfa.service";
 
 export interface TokenPair {
@@ -111,8 +112,44 @@ export class AuthService {
       return { mfaRequired: true, challengeId, expiresAt: expiresAt.toISOString() };
     }
 
-    // findByEmail already includes roles.
-    return this.issue(user, userAgent);
+    // Read the device history before issue() writes this session's row — afterwards
+    // the new row would match itself and no device would ever look new.
+    const unrecognised = await this.isNewDevice(user.id, userAgent);
+    const issued = await this.issue(user, userAgent);
+    if (unrecognised) void this.alertNewDevice(user.id, userAgent);
+    return issued;
+  }
+
+  /** True when this account has history but none of it is from a device like this one. */
+  private async isNewDevice(userId: string, userAgent?: string): Promise<boolean> {
+    const prior = await this.prisma.refreshToken.findMany({
+      where: { userId },
+      select: { userAgent: true },
+      // Enough to cover the devices someone actually uses; an account with hundreds of
+      // sessions does not need all of them loaded to answer this.
+      take: 50,
+      orderBy: { createdAt: "desc" },
+    });
+    return isUnrecognisedDevice(userAgent, prior.map((p) => p.userAgent));
+  }
+
+  /** Best-effort: never let a mail failure turn a successful sign-in into an error. */
+  private async alertNewDevice(userId: string, userAgent?: string): Promise<void> {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      });
+      if (!user) return;
+      const { subject, html } = signInAlertEmail({
+        device: deviceSignature(userAgent),
+        when: new Date(),
+        frontendUrl: this.config.getOrThrow<string>("FRONTEND_URL"),
+      });
+      await this.email.send(user.email, subject, html);
+    } catch {
+      // Swallowed: the sign-in itself has already succeeded.
+    }
   }
 
   /**
@@ -162,7 +199,11 @@ export class AuthService {
     const user = await this.users.findById(userId);
     if (!user) throw new UnauthorizedException("User not found");
     if (user.status !== "active") throw new UnauthorizedException("Account is not active");
-    return this.issue(user, userAgent);
+
+    const unrecognised = await this.isNewDevice(user.id, userAgent);
+    const issued = await this.issue(user, userAgent);
+    if (unrecognised) void this.alertNewDevice(user.id, userAgent);
+    return issued;
   }
 
   async revokeAllForUser(userId: string): Promise<void> {
