@@ -1,4 +1,5 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Req, UseGuards } from "@nestjs/common";
+import type { Request } from "express";
 import { CurrentUser } from "@/auth/current-user.decorator";
 import { JwtAuthGuard } from "@/auth/jwt-auth.guard";
 import type { AuthUser } from "@/auth/jwt.strategy";
@@ -25,8 +26,14 @@ export class WalletController {
   /** Starts a real charge — returns a Paystack checkout URL, does not touch the balance. */
   @Post("deposit/paystack/initialize")
   @HttpCode(200)
-  initializePaystack(@CurrentUser() user: AuthUser, @Body() dto: InitializePaystackDepositDto) {
-    return this.wallet.initializePaystackDeposit(user, dto.amountMinor);
+  initializePaystack(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: InitializePaystackDepositDto,
+    @Req() req: Request,
+  ) {
+    // The surface this came from decides where Paystack returns the browser —
+    // see WalletService.returnOrigin.
+    return this.wallet.initializePaystackDeposit(user, dto.amountMinor, req.get("origin") ?? undefined);
   }
 
   /** Polled by the frontend once Paystack redirects the browser back. */

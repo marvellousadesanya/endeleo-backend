@@ -63,7 +63,30 @@ export class WalletService {
   // ledger row is opened here, and only ever moved to "completed" once Paystack has
   // confirmed the money actually arrived (see confirmPaystackDeposit).
 
-  async initializePaystackDeposit(user: { id: string; email: string }, amountMinor: string) {
+  /**
+   * Where Paystack sends the browser back to.
+   *
+   * This was FRONTEND_URL, a single global. The app now serves three domains, and the
+   * session lives in browser storage, which is per-origin — so returning someone to a
+   * different origin than the one they started on drops them on a sign-in screen with
+   * their money already taken, and the verify call that credits the wallet never runs.
+   * The deposit then sits at `pending` until the webhook rescues it.
+   *
+   * The request's own Origin is used instead, checked against the CORS allowlist so a
+   * forged header cannot turn this into an open redirect. FRONTEND_URL stays the
+   * fallback for callers that send no Origin at all.
+   */
+  private returnOrigin(origin?: string): string {
+    const allowed = this.config.get<string[]>("CORS_ORIGINS") ?? [];
+    if (origin && allowed.includes(origin)) return origin;
+    return this.config.getOrThrow<string>("FRONTEND_URL");
+  }
+
+  async initializePaystackDeposit(
+    user: { id: string; email: string },
+    amountMinor: string,
+    origin?: string,
+  ) {
     const amount = BigInt(amountMinor);
     if (amount <= 0n) throw new BadRequestException("Amount must be positive");
 
@@ -82,12 +105,11 @@ export class WalletService {
       },
     });
 
-    const frontendUrl = this.config.get<string>("FRONTEND_URL");
     const { authorizationUrl } = await this.paystack.initialize({
       email: user.email,
       amountMinor: amount,
       reference,
-      callbackUrl: `${frontendUrl}/dashboard/wallet?paystack_reference=${reference}`,
+      callbackUrl: `${this.returnOrigin(origin)}/dashboard/wallet?paystack_reference=${reference}`,
     });
 
     return { authorizationUrl, reference };
