@@ -20,6 +20,7 @@ import {
   sendWelcomeEmail,
 } from "./auth-emails";
 import { deviceSignature, isUnrecognisedDevice, signInAlertEmail } from "./sign-in-alert";
+import { resolveReturnOrigin } from "@/config/return-origin";
 import { MfaService } from "./mfa/mfa.service";
 
 export interface TokenPair {
@@ -231,7 +232,11 @@ export class AuthService {
    * Any earlier unused tokens for the account are consumed first, so a fresh request
    * silently invalidates a link that may already be sitting in a stolen inbox.
    */
-  async forgotPassword(email: string, userAgent?: string): Promise<{ ok: true }> {
+  async forgotPassword(
+    email: string,
+    userAgent?: string,
+    origin?: string,
+  ): Promise<{ ok: true }> {
     const user = await this.users.findByEmail(email);
 
     if (user && user.status === "active") {
@@ -250,9 +255,11 @@ export class AuthService {
         },
       });
 
+      // Built from the surface the request came from, not FRONTEND_URL — see
+      // resolveReturnOrigin. A link that 404s is a reset that did not happen.
       await sendPasswordResetEmail(
         this.email,
-        this.config.getOrThrow<string>("FRONTEND_URL"),
+        resolveReturnOrigin(this.config, origin),
         user.email,
         token,
         PASSWORD_RESET_TTL_MS / 60_000,

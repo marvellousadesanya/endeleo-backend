@@ -34,7 +34,11 @@ export class AuthController {
   @Post("forgot-password")
   @HttpCode(200)
   forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
-    return this.auth.forgotPassword(dto.email, req.get("user-agent") ?? undefined);
+    return this.auth.forgotPassword(
+      dto.email,
+      req.get("user-agent") ?? undefined,
+      req.get("origin") ?? undefined,
+    );
   }
 
   /** Redeems the emailed token and sets a new password, signing out every session. */

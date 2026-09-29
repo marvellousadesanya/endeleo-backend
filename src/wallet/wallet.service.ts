@@ -14,6 +14,7 @@ import { PrismaService } from "@/database/prisma.service";
 import { EmailService } from "@/email/email.service";
 import { emailShell } from "@/email/email-templates";
 import { majorAmount } from "@/email/money-format";
+import { resolveReturnOrigin } from "@/config/return-origin";
 import { PaystackService } from "./paystack.service";
 
 @Injectable()
@@ -77,9 +78,7 @@ export class WalletService {
    * fallback for callers that send no Origin at all.
    */
   private returnOrigin(origin?: string): string {
-    const allowed = this.config.get<string[]>("CORS_ORIGINS") ?? [];
-    if (origin && allowed.includes(origin)) return origin;
-    return this.config.getOrThrow<string>("FRONTEND_URL");
+    return resolveReturnOrigin(this.config, origin);
   }
 
   async initializePaystackDeposit(
