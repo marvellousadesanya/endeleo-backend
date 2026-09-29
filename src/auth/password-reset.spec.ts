@@ -55,8 +55,16 @@ function makeService() {
   // CORS_ORIGINS with get() and FRONTEND_URL with getOrThrow().
   const config: any = {
     get: (key: string) =>
-      key === "CORS_ORIGINS" ? ["https://application.endeleo.online"] : undefined,
-    getOrThrow: () => "https://application.endeleo.online",
+      key === "CORS_ORIGINS"
+        ? [
+            "https://application.endeleo.online",
+            "https://submission.endeleo.online",
+            "https://arrangement.endeleo.online",
+          ]
+        : undefined,
+    // Deliberately a host that serves a *different* deployment, as production's really
+    // did — so any test that passes by falling back here is obviously wrong.
+    getOrThrow: () => "https://app.endeleo.online",
   };
   const email: any = {
     send: vi.fn(async (to: string, subject: string, html: string) => {
@@ -202,5 +210,37 @@ describe("AuthService constructor wiring", () => {
     expect(service).toBeInstanceOf(AuthService);
     expect(typeof service.forgotPassword).toBe("function");
     expect(typeof service.resetPassword).toBe("function");
+  });
+});
+
+describe("the reset link points back at the surface that asked for it", () => {
+  const linkFrom = (html: string) =>
+    decodeURIComponent(/href="([^"]*reset-password[^"]*)"/.exec(html)?.[1] ?? "");
+
+  // An admin who resets from the origination console must land back on the origination
+  // console, not be bounced onto the investor app — the three domains are meant to read
+  // as separate products.
+  it.each([
+    "https://arrangement.endeleo.online",
+    "https://submission.endeleo.online",
+    "https://application.endeleo.online",
+  ])("keeps a reset started on %s on that domain", async (origin) => {
+    const { service, sent } = makeService();
+    await service.forgotPassword(ACTIVE_USER.email, undefined, origin);
+    expect(linkFrom(sent.at(-1)!.html)).toMatch(new RegExp(`^${origin}/reset-password\\?token=`));
+  });
+
+  // Origin is caller-controlled. A forged one must not decide where a password reset
+  // link sends somebody.
+  it("ignores an origin that is not an Endeleo surface", async () => {
+    const { service, sent } = makeService();
+    await service.forgotPassword(ACTIVE_USER.email, undefined, "https://evil.example.com");
+    expect(linkFrom(sent.at(-1)!.html)).toContain("https://app.endeleo.online/reset-password");
+  });
+
+  it("falls back to the configured URL when there is no Origin", async () => {
+    const { service, sent } = makeService();
+    await service.forgotPassword(ACTIVE_USER.email);
+    expect(linkFrom(sent.at(-1)!.html)).toContain("https://app.endeleo.online/reset-password");
   });
 });
