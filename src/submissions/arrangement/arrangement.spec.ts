@@ -243,3 +243,68 @@ describe("recommendPricing", () => {
     expect(() => recommendPricing(100, 1800)).not.toThrow();
   });
 });
+
+describe("the bankability breakdown explains the score it came with", () => {
+  const strong = {
+    revenueModel: "government_payment" as const,
+    offtakeAgreementInPlace: true,
+    priorDfiFunding: true,
+    ongoingLitigation: false,
+    priorDefault: false,
+  };
+
+  // The breakdown exists so a reviewer can see why a score is what it is. If it stops
+  // adding up to the score, it is worse than not showing it at all.
+  it("sums to the score before the 0-100 clamp", () => {
+    const table = buildDscrTable(
+      [
+        { year: 2027, revenueMinor: 38_000_000_000n, opexMinor: 12_000_000_000n },
+        { year: 2028, revenueMinor: 39_600_000_000n, opexMinor: 12_500_000_000n },
+      ],
+      75_000_000_000n,
+      1200,
+    );
+    const result = scoreBankability(table, strong);
+    const summed = result.components.reduce((t, c) => t + c.earned, 0);
+    expect(Math.min(100, Math.round(summed))).toBe(result.score);
+  });
+
+  it("never reports more than a component's weight", () => {
+    const table = buildDscrTable(
+      [{ year: 2027, revenueMinor: 90_000_000_000n, opexMinor: 1_000_000_000n }],
+      10_000_000_000n,
+      1000,
+    );
+    for (const c of scoreBankability(table, strong).components) {
+      expect(c.earned).toBeLessThanOrEqual(c.max);
+      expect(c.earned).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("gives coverage nothing when the deal fails the floor", () => {
+    const thin = buildDscrTable(
+      [{ year: 2027, revenueMinor: 10_000_000_000n, opexMinor: 9_000_000_000n }],
+      50_000_000_000n,
+      1500,
+    );
+    const coverage = scoreBankability(thin, strong).components.find(
+      (c) => c.label === "Debt service coverage",
+    );
+    expect(coverage?.earned).toBe(0);
+    expect(coverage?.note).toMatch(/below the .* floor/i);
+  });
+
+  it("shows the sponsor component falling on a prior default", () => {
+    const table = buildDscrTable(
+      [{ year: 2027, revenueMinor: 38_000_000_000n, opexMinor: 12_000_000_000n }],
+      75_000_000_000n,
+      1200,
+    );
+    const clean = scoreBankability(table, strong).components.find((c) => c.label === "Sponsor track record");
+    const defaulted = scoreBankability(table, { ...strong, priorDefault: true }).components.find(
+      (c) => c.label === "Sponsor track record",
+    );
+    expect(defaulted!.earned).toBeLessThan(clean!.earned);
+    expect(defaulted!.note).toMatch(/prior default/i);
+  });
+});

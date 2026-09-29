@@ -72,10 +72,29 @@ export interface SelfAssessmentInput {
   priorDefault: boolean | null;
 }
 
+/**
+ * One line of the scorecard, so a reviewer can see *why* a score is what it is rather
+ * than being handed a single number. `max` is the weight; `earned` is what this deal
+ * actually got.
+ */
+export interface ScoreComponent {
+  label: string;
+  earned: number;
+  max: number;
+  /** Plain reason for the points, shown under the bar. */
+  note: string;
+}
+
 export interface BankabilityResult {
   score: number;
   recommendation: BankabilityRecommendation;
   riskFlags: string[];
+  /**
+   * The score broken into its four weights. They sum to 105 before the 0–100 clamp —
+   * a deal cannot realistically max every one, and clamping is cheaper to reason about
+   * than rescaling weights that a capital-markets reviewer still has to sign off.
+   */
+  components: ScoreComponent[];
 }
 
 /** Points for revenue certainty — a government or offtake-backed deal de-risks the raise. */
@@ -97,11 +116,15 @@ export function scoreBankability(dscrTable: DscrYear[], self: SelfAssessmentInpu
   const riskFlags: string[] = [];
   let score = 0;
 
-  score += self.revenueModel ? REVENUE_MODEL_POINTS[self.revenueModel] : 0;
+  // The components array mirrors the arithmetic below rather than replacing it: the
+  // total must stay byte-identical to what it was before this breakdown existed.
+  const revenuePoints = self.revenueModel ? REVENUE_MODEL_POINTS[self.revenueModel] : 0;
+  score += revenuePoints;
   if (!self.revenueModel) riskFlags.push("Revenue model not specified");
 
-  if (self.offtakeAgreementInPlace) score += 15;
-  else riskFlags.push("No offtake or revenue agreement on file");
+  const offtakePoints = self.offtakeAgreementInPlace ? 15 : 0;
+  score += offtakePoints;
+  if (!self.offtakeAgreementInPlace) riskFlags.push("No offtake or revenue agreement on file");
 
   // Coverage is a veto, not just a scoring input. Without this, a government-backed
   // sponsor with a clean record scores 60 on qualitative points alone and lands on
@@ -110,6 +133,7 @@ export function scoreBankability(dscrTable: DscrYear[], self: SelfAssessmentInpu
   // against a NGN 500M raise, a base DSCR of 0.34x). Reputation does not pay coupons.
   let cannotServiceDebt = false;
   let belowDscrFloor = false;
+  let coveragePoints = 0;
 
   if (dscrTable.length === 0) {
     riskFlags.push("No cashflow projection submitted — feasibility cannot be scored");
@@ -120,7 +144,8 @@ export function scoreBankability(dscrTable: DscrYear[], self: SelfAssessmentInpu
       riskFlags.push(`Base-case DSCR falls below ${DSCR_MINIMUM}x in at least one year (min ${minBaseDscr}x)`);
     } else {
       const headroom = Math.min(minBaseDscr - DSCR_MINIMUM, 1); // credit capped at +1.0x
-      score += 25 + headroom * 15;
+      coveragePoints = 25 + headroom * 15;
+      score += coveragePoints;
     }
 
     if (minBaseDscr < 1) {
@@ -134,18 +159,61 @@ export function scoreBankability(dscrTable: DscrYear[], self: SelfAssessmentInpu
     }
   }
 
-  score += 20;
+  let trackRecordPoints = 20;
   if (self.priorDefault) {
-    score -= 30;
+    trackRecordPoints -= 30;
     riskFlags.push("Sponsor has a prior default on record");
   }
   if (self.ongoingLitigation) {
-    score -= 10;
+    trackRecordPoints -= 10;
     riskFlags.push("Ongoing litigation disclosed");
   }
-  if (self.priorDfiFunding) score += 5;
+  if (self.priorDfiFunding) trackRecordPoints += 5;
+  score += trackRecordPoints;
 
   score = Math.max(0, Math.min(100, Math.round(score)));
+
+  const components: ScoreComponent[] = [
+    {
+      label: "Revenue certainty",
+      earned: revenuePoints,
+      max: 25,
+      note: self.revenueModel
+        ? `Revenue model: ${self.revenueModel.replace(/_/g, " ")}`
+        : "No revenue model given",
+    },
+    {
+      label: "Offtake security",
+      earned: offtakePoints,
+      max: 15,
+      note: self.offtakeAgreementInPlace
+        ? "Signed offtake or revenue agreement on file"
+        : "No signed agreement",
+    },
+    {
+      label: "Debt service coverage",
+      earned: Math.round(coveragePoints),
+      max: 40,
+      note:
+        dscrTable.length === 0
+          ? "No cashflow projection to score"
+          : belowDscrFloor
+            ? `Below the ${DSCR_MINIMUM}x floor — scores nothing`
+            : `Clears the ${DSCR_MINIMUM}x floor, with headroom`,
+    },
+    {
+      label: "Sponsor track record",
+      earned: Math.max(0, trackRecordPoints),
+      max: 25,
+      note: self.priorDefault
+        ? "Prior default on record"
+        : self.ongoingLitigation
+          ? "Ongoing litigation disclosed"
+          : self.priorDfiFunding
+            ? "Prior DFI funding counts in favour"
+            : "No adverse history disclosed",
+    },
+  ];
 
   let recommendation: BankabilityRecommendation;
   if (self.priorDefault || cannotServiceDebt || score < 40) {
@@ -157,5 +225,5 @@ export function scoreBankability(dscrTable: DscrYear[], self: SelfAssessmentInpu
     recommendation = "go";
   }
 
-  return { score, recommendation, riskFlags };
+  return { score, recommendation, riskFlags, components };
 }
