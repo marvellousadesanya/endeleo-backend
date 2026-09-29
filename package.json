@@ -24,6 +24,7 @@
     "inventory": "tsx prisma/inventory.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0",
     "@aws-sdk/client-s3": "^3.1121.0",
     "@aws-sdk/s3-request-presigner": "^3.1121.0",
     "@nestjs/common": "^11.1.6",

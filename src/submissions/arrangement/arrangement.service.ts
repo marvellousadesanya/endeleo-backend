@@ -8,12 +8,14 @@ import { PrismaService } from "@/database/prisma.service";
 import { buildDscrTable, scoreBankability, type CashflowYear } from "./feasibility";
 import { recommendStructure } from "./structuring";
 import { recommendPricing } from "./pricing";
+import { ArrangementAiService, type AiOpinion } from "@/arrangement-ai/arrangement-ai.service";
 
 @Injectable()
 export class ArrangementService {
   private readonly benchmarkBps: number;
 
   constructor(
+    private readonly ai: ArrangementAiService,
     private readonly prisma: PrismaService,
     config: ConfigService,
   ) {
@@ -60,11 +62,72 @@ export class ArrangementService {
     const structuring = recommendStructure(tenorMonths, dscrTable);
     const pricing = recommendPricing(bankability.score, this.benchmarkBps);
 
+    // The AI layer's opinions on the three modules the specification describes as
+    // model-driven. Requested in parallel — they are independent, and three round trips
+    // in series would be felt on a screen someone opens per deal.
+    //
+    // Each returns null when the AI is off or the call fails, and every panel renders
+    // from the computed figures in that case. The model reasons over the arithmetic
+    // above; it never replaces it.
+    const [feasibilityAi, structuringAi, pricingAi] = await Promise.all([
+      this.ai.opine({
+        module: "M2 Feasibility & Bankability",
+        task: "Judge whether this project can service the debt it is asking for, and what a credit committee would ask next. `value` is your own bankability score out of 100.",
+        facts: {
+          capitalSoughtMinor: capitalRequiredMinor.toString(),
+          requestedCouponBps: expectedReturnBps,
+          tenorMonths,
+          dscrTable: dscrTable.map((d) => ({
+            year: d.year,
+            netCashflowMinor: d.netCashflowMinor.toString(),
+            annualDebtServiceMinor: d.annualDebtServiceMinor.toString(),
+            dscr: d.dscr,
+          })),
+          computedScore: bankability.score,
+          computedRecommendation: bankability.recommendation,
+          scoreComponents: bankability.components,
+          riskFlags: bankability.riskFlags,
+          selfAssessment: {
+            revenueModel: submission.revenueModel,
+            offtakeAgreementInPlace: submission.offtakeAgreementInPlace,
+            priorDfiFunding: submission.priorDfiFunding,
+            ongoingLitigation: submission.ongoingLitigation,
+            priorDefault: submission.priorDefault,
+          },
+        },
+      }),
+      this.ai.opine({
+        module: "M3 Bond Structuring",
+        task: "Judge the recommended instrument, repayment profile and covenant package against this deal's coverage. Say what you would change and why. `value` may be null.",
+        facts: {
+          computedStructure: structuring,
+          dscrTable: dscrTable.map((d) => ({ year: d.year, dscr: d.dscr })),
+          tenorMonths,
+          sector: submission.sector,
+          revenueModel: submission.revenueModel,
+        },
+      }),
+      this.ai.opine({
+        module: "M5 Bond Pricing",
+        task: "Judge the indicative coupon for this deal in the Nigerian naira infrastructure market. `value` is the credit spread over the benchmark you would quote, in basis points.",
+        facts: {
+          computedPricing: pricing,
+          bankabilityScore: bankability.score,
+          recommendation: bankability.recommendation,
+          tenorMonths,
+          sector: submission.sector,
+          capitalSoughtMinor: capitalRequiredMinor.toString(),
+          note: "The benchmark is a manually configured placeholder, not a live FGN or FMDQ yield. There is no closed-deal history on this platform to compare against.",
+        },
+      }),
+    ]);
+
     return {
       submissionId: submission.id,
-      feasibility: { dscrTable, bankability },
-      structuring,
-      pricing,
+      aiEnabled: this.ai.enabled,
+      feasibility: { dscrTable, bankability, ai: feasibilityAi },
+      structuring: { ...structuring, ai: structuringAi },
+      pricing: { ...pricing, ai: pricingAi },
     };
   }
 }

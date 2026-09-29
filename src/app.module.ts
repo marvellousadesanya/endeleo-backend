@@ -20,6 +20,7 @@ import { UsersModule } from "@/users/users.module";
 import { SponsorPortalModule } from "@/sponsor-portal/sponsor-portal.module";
 import { EmailModule } from "@/email/email.module";
 import { NotificationsModule } from "@/notifications/notifications.module";
+import { ArrangementAiModule } from "./arrangement-ai/arrangement-ai.module";
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { NotificationsModule } from "@/notifications/notifications.module";
     DatabaseModule,
     EmailModule,
     NotificationsModule,
+    ArrangementAiModule,
     SchedulerModule,
     UsersModule,
     AuditModule,
