@@ -3,7 +3,7 @@
 // Submitting is deliberately public: a sponsor can propose a project before holding an
 // account, which is how the marketing funnel works. Reading submissions back is not,
 // and is scoped to the signed-in submitter.
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { Prisma, SubmissionStatus } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
@@ -11,6 +11,7 @@ import { StorageService } from "@/storage/storage.service";
 import { BondsService } from "@/bonds/bonds.service";
 import { NotificationsService } from "@/notifications/notifications.service";
 import { emailShell } from "@/email/email-templates";
+import { naira } from "@/email/money-format";
 import type { CreateBondDto } from "@/bonds/dto/bonds.dto";
 import type { CreateSubmissionDto, PromoteSubmissionDto, ReviewSubmissionDto } from "./dto/submissions.dto";
 
@@ -66,6 +67,7 @@ export function parseCashflows(raw: string | undefined): { year: number; revenue
 
 @Injectable()
 export class SubmissionsService {
+  private readonly logger = new Logger(SubmissionsService.name);
   private readonly frontendUrl: string;
 
   constructor(
@@ -159,6 +161,11 @@ export class SubmissionsService {
         },
         include: { cashflows: { orderBy: { year: "asc" } } },
       });
+
+      // Not awaited: a sponsor who has just spent twenty minutes on this form should see
+      // the confirmation screen the moment the row is durable, not after two mail calls.
+      void this.notifySubmissionReceived(created);
+
       return this.withCoverUrl(created);
     } catch (err) {
       // Do not leave uploaded bytes behind if the row could not be written.
@@ -234,6 +241,100 @@ export class SubmissionsService {
       await this.notifyReviewStatus(updated);
     }
     return this.withCoverUrl(updated);
+  }
+
+  /**
+   * Two messages on intake: a receipt for the sponsor, and an alert to the origination
+   * desk. Neither existed before — a sponsor could submit a NGN 750M project and get
+   * nothing back, and nobody on the desk was told a deal had arrived at all. The
+   * arrangement screen only helps if someone knows to go and look at it.
+   *
+   * Never throws: intake has already succeeded by the time this runs, and a mail
+   * provider having a bad minute must not turn a saved submission into an error.
+   */
+  private async notifySubmissionReceived(submission: {
+    id: string; userId: string | null; projectTitle: string; submitterEmail: string | null;
+    submitterName: string | null; sector: string | null; locationState: string | null;
+    capitalRequiredMinor: bigint | null; organization: string | null;
+  }) {
+    try {
+      if (submission.submitterEmail) {
+        const html = emailShell({
+          heading: "We've got your submission",
+          bodyHtml:
+            `<p>Thanks — <strong>${submission.projectTitle}</strong> is with our origination desk.</p>` +
+            `<p>We screen every proposal against its own cashflow projection before a reviewer ` +
+            `looks at it, and we aim to come back to you within 10 business days. You can follow ` +
+            `its progress from your status tracker at any time.</p>`,
+          ctaLabel: "View status tracker",
+          ctaHref: `${this.frontendUrl}/sponsor/projects`,
+        });
+        await this.notifications.emailAddress(
+          submission.submitterEmail,
+          "We've received your project submission",
+          html,
+        );
+      }
+
+      if (submission.userId) {
+        await this.prisma.notification.create({
+          data: {
+            userId: submission.userId,
+            title: "Submission received",
+            body: submission.projectTitle,
+            href: "/sponsor/projects",
+          },
+        });
+      }
+
+      await this.alertOriginationDesk(submission);
+    } catch (err) {
+      this.logger.error(`Submission ${submission.id} saved, but intake alerts failed: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Tells every admin a deal has landed. Admins are looked up rather than configured
+   * through an env var so that granting someone the role is all it takes to put them on
+   * the list — one less thing to keep in step by hand.
+   */
+  private async alertOriginationDesk(submission: {
+    id: string; projectTitle: string; submitterName: string | null; organization: string | null;
+    sector: string | null; locationState: string | null; capitalRequiredMinor: bigint | null;
+  }) {
+    const admins = await this.prisma.user.findMany({
+      where: { roles: { some: { role: "admin" } }, status: "active" },
+      select: { id: true },
+    });
+    if (admins.length === 0) return;
+
+    const facts = [
+      ["Sponsor", submission.organization || submission.submitterName || "—"],
+      ["Sector", submission.sector || "—"],
+      ["Location", submission.locationState || "—"],
+      ["Capital sought", submission.capitalRequiredMinor ? naira(submission.capitalRequiredMinor) : "—"],
+    ]
+      .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#9aa39a;">${k}</td><td>${v}</td></tr>`)
+      .join("");
+
+    for (const admin of admins) {
+      await this.notifications.notify({
+        userId: admin.id,
+        title: "New project submission",
+        body: submission.projectTitle,
+        href: `/admin/submissions/${submission.id}`,
+        email: {
+          subject: `New submission: ${submission.projectTitle}`,
+          bodyHtml:
+            `<p><strong>${submission.projectTitle}</strong> has been submitted for appraisal.</p>` +
+            `<table style="font-size:14px;line-height:1.6;">${facts}</table>` +
+            `<p>The arrangement screen — coverage, bankability and indicative pricing — is ` +
+            `already computed and waiting on the submission page.</p>`,
+          ctaLabel: "Open the screen",
+          ctaHref: `${this.frontendUrl}/admin/submissions/${submission.id}`,
+        },
+      });
+    }
   }
 
   /**
