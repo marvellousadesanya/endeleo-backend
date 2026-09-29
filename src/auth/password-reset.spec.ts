@@ -51,7 +51,13 @@ function makeService() {
       email === ACTIVE_USER.email ? ACTIVE_USER : null,
     ),
   };
-  const config: any = { getOrThrow: () => "https://application.endeleo.online" };
+  // Mirrors ConfigService closely enough for resolveReturnOrigin, which reads
+  // CORS_ORIGINS with get() and FRONTEND_URL with getOrThrow().
+  const config: any = {
+    get: (key: string) =>
+      key === "CORS_ORIGINS" ? ["https://application.endeleo.online"] : undefined,
+    getOrThrow: () => "https://application.endeleo.online",
+  };
   const email: any = {
     send: vi.fn(async (to: string, subject: string, html: string) => {
       sent.push({ to, subject, html });
