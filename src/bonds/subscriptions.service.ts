@@ -4,8 +4,11 @@
 // happen inside Postgres procedures. This layer does the checks that are policy rather
 // than integrity, and orchestrates the money rail around them.
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
 import { AuditService } from "@/audit/audit.service";
+import { NotificationsService } from "@/notifications/notifications.service";
+import { naira } from "@/email/money-format";
 import { PaymentAdapter } from "./adapters/payment.adapter";
 import { toMinor } from "./dto/bonds.dto";
 
@@ -14,11 +17,43 @@ const COOLING_OFF_HOURS = 48;
 
 @Injectable()
 export class SubscriptionsService {
+  private readonly frontendUrl: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly payments: PaymentAdapter,
-  ) {}
+    private readonly notifications: NotificationsService,
+    config: ConfigService,
+  ) {
+    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+  }
+
+  /** Escrow has become units: the holding is real and the cooling-off window has closed. */
+  private async notifyAllocated(holding: { bond_id: string; user_id: string; units_minor: bigint }) {
+    const bond = await this.prisma.bond.findUnique({
+      where: { id: holding.bond_id },
+      select: { title: true },
+    });
+    if (!bond) return;
+
+    await this.notifications.notify({
+      userId: holding.user_id,
+      title: "Your units have been allocated",
+      body: `${naira(holding.units_minor)} of ${bond.title} is now held in your name.`,
+      href: "/dashboard/portfolio",
+      email: {
+        subject: `Units allocated — ${bond.title}`,
+        bodyHtml:
+          `<p><strong>${naira(holding.units_minor)}</strong> of <strong>${bond.title}</strong> ` +
+          `has been allocated to you and is now held in your name.</p>` +
+          `<p>Coupon payments will be paid to your Endeleo wallet on the bond's schedule, ` +
+          `and your principal is returned at maturity.</p>`,
+        ctaLabel: "View portfolio",
+        ctaHref: `${this.frontendUrl}/dashboard/portfolio`,
+      },
+    });
+  }
 
   async subscribe(bondId: string, amountRaw: string, user: { id: string; kycTier: number }) {
     const amountMinor = toMinor(amountRaw, "amountMinor");
@@ -63,6 +98,31 @@ export class SubscriptionsService {
       { bondId, userId: user.id, event: "subscription_created", payload: { subscriptionId: subscription.id, amountMinor: amountMinor.toString() } },
       { bondId, userId: user.id, event: "funds_escrowed", payload: { reference: escrow.escrowReference } },
     ]);
+
+    // Committing money with no confirmation is the single most alarming thing a
+    // platform can do. Fired after the audit entries, and deliberately not awaited:
+    // the subscription is already durable, and a slow mail provider must not make the
+    // investor think their money went nowhere.
+    void this.notifications
+      .notify({
+        userId: user.id,
+        title: "Subscription confirmed",
+        body: `${naira(amountMinor)} committed to ${bond.title}.`,
+        href: "/dashboard/portfolio",
+        email: {
+          subject: `Subscription confirmed — ${bond.title}`,
+          bodyHtml:
+            `<p>You have committed <strong>${naira(amountMinor)}</strong> to ` +
+            `<strong>${bond.title}</strong>.</p>` +
+            `<p>The funds are held in escrow, not yet invested. You have ` +
+            `${COOLING_OFF_HOURS} hours to cancel for a full refund; after that your ` +
+            `subscription is allocated into units and the holding becomes yours.</p>`,
+          ctaLabel: "View portfolio",
+          ctaHref: `${this.frontendUrl}/dashboard/portfolio`,
+        },
+      })
+      .catch(() => {});
+
     return subscription;
   }
 
@@ -72,6 +132,11 @@ export class SubscriptionsService {
       const [holding] = await this.prisma.$queryRaw<
         { id: string; bond_id: string; user_id: string; units_minor: bigint }[]
       >`SELECT * FROM allocate_subscription(${subscriptionId}::uuid)`;
+
+      // The moment escrow becomes a real holding — the investor now owns units rather
+      // than having money set aside, and the cooling-off window is over.
+      if (holding) void this.notifyAllocated(holding).catch(() => {});
+
       return holding;
     } catch (e) {
       throw mapProcedureError(e);
