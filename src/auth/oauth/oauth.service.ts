@@ -3,8 +3,11 @@
 // The provider proves who someone is. This decides which Endeleo user that maps to,
 // and hands back a one-time code the browser can trade for real tokens.
 import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { createHash, randomBytes } from "node:crypto";
 import { PrismaService } from "@/database/prisma.service";
+import { EmailService } from "@/email/email.service";
+import { sendWelcomeEmail } from "../auth-emails";
 import { normaliseEmail, type UserWithRoles } from "@/users/users.service";
 import type { GoogleProfile } from "./google.provider";
 
@@ -19,7 +22,11 @@ function sha256(value: string): string {
 export class OAuthService {
   private readonly logger = new Logger(OAuthService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly email: EmailService,
+    private readonly config: ConfigService,
+  ) {}
 
   /**
    * Map a social profile onto an Endeleo user.
@@ -69,6 +76,17 @@ export class OAuthService {
       },
       include: { roles: true },
     });
+
+    // Signing in with Google for the first time creates an account, so it earns the
+    // same confirmation a password signup gets. Not awaited: a slow mail provider must
+    // not stall the redirect back from the provider.
+    void sendWelcomeEmail(
+      this.email,
+      this.config.getOrThrow<string>("FRONTEND_URL"),
+      created.email,
+      created.fullName,
+    );
+
     return toUserWithRoles(created);
   }
 

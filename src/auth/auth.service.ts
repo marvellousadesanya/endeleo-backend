@@ -13,6 +13,8 @@ import { hash as argonHash, verify as argonVerify } from "@node-rs/argon2";
 import { createHash, randomBytes } from "node:crypto";
 import { PrismaService } from "@/database/prisma.service";
 import { UsersService, type UserWithRoles } from "@/users/users.service";
+import { EmailService } from "@/email/email.service";
+import { sendWelcomeEmail } from "./auth-emails";
 import { MfaService } from "./mfa/mfa.service";
 
 export interface TokenPair {
@@ -58,6 +60,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly mfa: MfaService,
+    private readonly email: EmailService,
   ) {}
 
   async register(input: { email: string; password: string; fullName?: string }): Promise<AuthResult> {
@@ -70,6 +73,15 @@ export class AuthService {
       passwordHash,
       fullName: input.fullName,
     });
+
+    // Not awaited: a signup must not hang because a mail provider is slow.
+    void sendWelcomeEmail(
+      this.email,
+      this.config.getOrThrow<string>("FRONTEND_URL"),
+      user.email,
+      input.fullName,
+    );
+
     return this.issue(user);
   }
 
