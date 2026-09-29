@@ -21,7 +21,8 @@
     "dev:user": "tsx prisma/dev-user.ts",
     "demo:arrangement": "tsx prisma/demo-arrangement.ts",
     "test": "vitest run",
-    "inventory": "tsx prisma/inventory.ts"
+    "inventory": "tsx prisma/inventory.ts",
+    "e2e:seed": "tsx prisma/dev-user.ts e2e@endeleo.test --password e2e-local-throwaway --roles admin,investor --kyc verified"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
