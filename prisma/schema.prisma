@@ -86,11 +86,12 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  credential    UserCredential?
-  identities    UserIdentity[]
-  roles         UserRoleAssignment[]
-  refreshTokens RefreshToken[]
-  exchangeCodes OAuthExchangeCode[]
+  credential     UserCredential?
+  identities     UserIdentity[]
+  roles          UserRoleAssignment[]
+  refreshTokens  RefreshToken[]
+  exchangeCodes  OAuthExchangeCode[]
+  passwordResets PasswordResetToken[]
 
   issuedBonds      Bond[]                @relation("BondIssuer")
   subscriptions    Subscription[]
@@ -115,8 +116,8 @@ model User {
   applications     InvestorApplication[]
   mfaFactors       MfaFactor[]
   mfaChallenges    MfaChallenge[]
-  teamOwnerOf      SponsorTeamMember[] @relation("TeamOwner")
-  teamMemberOf     SponsorTeamMember[] @relation("TeamMember")
+  teamOwnerOf      SponsorTeamMember[]   @relation("TeamOwner")
+  teamMemberOf     SponsorTeamMember[]   @relation("TeamMember")
 
   @@map("users")
 }
@@ -212,6 +213,32 @@ model OAuthExchangeCode {
 
   @@index([expiresAt])
   @@map("oauth_exchange_codes")
+}
+
+/// A single-use link emailed to someone who has forgotten their password.
+///
+/// Only the SHA-256 of the token is stored, exactly as refresh tokens and OAuth
+/// exchange codes are: a leaked database row must not be redeemable. The plaintext
+/// exists once, in the email, and is never written down anywhere.
+///
+/// Short-lived and single-use. `usedAt` is set rather than the row deleted, so a second
+/// click on the same link can be told "already used" instead of "invalid", and so the
+/// cleanup job has something to sweep.
+model PasswordResetToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  userId    String    @map("user_id") @db.Uuid
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  /// What asked for the reset, for reading back an abuse report later.
+  userAgent String?   @map("user_agent")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -358,7 +385,7 @@ model Bond {
   createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  issuer            User               @relation("BondIssuer", fields: [issuerId], references: [id], onDelete: Restrict)
+  issuer            User                   @relation("BondIssuer", fields: [issuerId], references: [id], onDelete: Restrict)
   subscriptions     Subscription[]
   holdings          Holding[]
   couponSchedules   CouponSchedule[]
@@ -902,12 +929,12 @@ model ProjectSubmission {
   priorDefault            Boolean?      @map("prior_default")
   useOfProceedsDetail     String?       @map("use_of_proceeds_detail")
 
-  status               SubmissionStatus @default(submitted)
-  reviewerNotes        String?          @map("reviewer_notes")
+  status        SubmissionStatus @default(submitted)
+  reviewerNotes String?          @map("reviewer_notes")
   /// Set when status moves out of "submitted" — an admin looked at it.
-  reviewedAt           DateTime?        @map("reviewed_at") @db.Timestamptz(6)
-  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  reviewedAt    DateTime?        @map("reviewed_at") @db.Timestamptz(6)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 

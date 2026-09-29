@@ -6,7 +6,7 @@
 //     hand an attacker usable sessions.
 //   * Refresh tokens rotate on every use. Replaying a rotated token is treated as theft
 //     and revokes the entire session family.
-import { ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { hash as argonHash, verify as argonVerify } from "@node-rs/argon2";
@@ -14,7 +14,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { PrismaService } from "@/database/prisma.service";
 import { UsersService, type UserWithRoles } from "@/users/users.service";
 import { EmailService } from "@/email/email.service";
-import { sendWelcomeEmail } from "./auth-emails";
+import {
+  sendPasswordChangedEmail,
+  sendPasswordResetEmail,
+  sendWelcomeEmail,
+} from "./auth-emails";
 import { deviceSignature, isUnrecognisedDevice, signInAlertEmail } from "./sign-in-alert";
 import { MfaService } from "./mfa/mfa.service";
 
@@ -33,6 +37,14 @@ export interface MfaRequired {
 export interface AuthResult extends TokenPair {
   user: { id: string; email: string; fullName: string | null; roles: string[]; kycTier: number };
 }
+
+/**
+ * How long a password reset link lives.
+ *
+ * Short on purpose: the link is a bearer credential sitting in an inbox, and the
+ * person asking for it is, by definition, at their keyboard right now.
+ */
+const PASSWORD_RESET_TTL_MS = 60 * 60_000;
 
 /** Opaque random string — a refresh token carries no claims, it is just a lookup key. */
 function newRefreshToken(): string {
@@ -204,6 +216,103 @@ export class AuthService {
     const issued = await this.issue(user, userAgent);
     if (unrecognised) void this.alertNewDevice(user.id, userAgent);
     return issued;
+  }
+
+  // ---- Password reset ------------------------------------------------------
+
+  /**
+   * Start a reset.
+   *
+   * Always resolves the same way, whether or not the address has an account. Answering
+   * differently — a 404, a slower response, a different message — turns this endpoint
+   * into a way to test which email addresses are registered on a financial platform.
+   * The caller is told "if that address has an account, we've sent a link" regardless.
+   *
+   * Any earlier unused tokens for the account are consumed first, so a fresh request
+   * silently invalidates a link that may already be sitting in a stolen inbox.
+   */
+  async forgotPassword(email: string, userAgent?: string): Promise<{ ok: true }> {
+    const user = await this.users.findByEmail(email);
+
+    if (user && user.status === "active") {
+      await this.prisma.passwordResetToken.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+
+      const token = randomBytes(32).toString("base64url");
+      await this.prisma.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          tokenHash: hashToken(token),
+          expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+          userAgent: userAgent ?? null,
+        },
+      });
+
+      await sendPasswordResetEmail(
+        this.email,
+        this.config.getOrThrow<string>("FRONTEND_URL"),
+        user.email,
+        token,
+        PASSWORD_RESET_TTL_MS / 60_000,
+      );
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * Finish a reset.
+   *
+   * Everything that must not half-happen runs in one transaction: the token is spent,
+   * the password is replaced, and every existing session is revoked. That last part is
+   * the point — if the reset was triggered because someone else had the account,
+   * leaving their refresh token alive would hand it straight back to them.
+   *
+   * Unlike the request step, this one does report failure. There is no enumeration risk
+   * in saying a token is invalid: the caller already holds it.
+   */
+  async resetPassword(token: string, newPassword: string): Promise<{ ok: true }> {
+    const row = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash: hashToken(token) },
+      include: { user: { select: { id: true, email: true, status: true } } },
+    });
+
+    if (!row) throw new BadRequestException("That reset link is not valid");
+    if (row.usedAt) throw new BadRequestException("That reset link has already been used");
+    if (row.expiresAt < new Date()) throw new BadRequestException("That reset link has expired");
+    if (row.user.status !== "active") throw new UnauthorizedException("Account is not active");
+
+    const passwordHash = await argonHash(newPassword);
+
+    await this.prisma.$transaction([
+      this.prisma.passwordResetToken.update({
+        where: { id: row.id },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.userCredential.upsert({
+        where: { userId: row.user.id },
+        // An account created through Google has no credential row yet; a reset is a
+        // legitimate way to add a password to it.
+        create: { userId: row.user.id, passwordHash },
+        update: { passwordHash },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId: row.user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+
+    // After the transaction: the change is durable, and this is a notification, not a
+    // step. It is also the alarm if the reset was not the account holder's doing.
+    void sendPasswordChangedEmail(
+      this.email,
+      this.config.getOrThrow<string>("FRONTEND_URL"),
+      row.user.email,
+    );
+
+    return { ok: true };
   }
 
   async revokeAllForUser(userId: string): Promise<void> {

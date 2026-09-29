@@ -32,3 +32,22 @@ export class RefreshDto {
   @MaxLength(500)
   refreshToken!: string;
 }
+
+export class ForgotPasswordDto {
+  @IsEmail({}, { message: "A valid email is required" })
+  @MaxLength(254)
+  email!: string;
+}
+
+export class ResetPasswordDto {
+  @IsString()
+  @MaxLength(200)
+  token!: string;
+
+  // Same floor as registration — a reset must not be a way to set a weaker password
+  // than signup would have allowed.
+  @IsString()
+  @MinLength(12, { message: "Password must be at least 12 characters" })
+  @MaxLength(200)
+  password!: string;
+}

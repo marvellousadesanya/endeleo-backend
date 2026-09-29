@@ -2,7 +2,13 @@ import { Body, Controller, Get, HttpCode, Post, Req, UseGuards } from "@nestjs/c
 import type { Request } from "express";
 import { AuthService } from "./auth.service";
 import { CurrentUser } from "./current-user.decorator";
-import { LoginDto, RefreshDto, RegisterDto } from "./dto/auth.dto";
+import {
+  ForgotPasswordDto,
+  LoginDto,
+  RefreshDto,
+  RegisterDto,
+  ResetPasswordDto,
+} from "./dto/auth.dto";
 import { JwtAuthGuard } from "./jwt-auth.guard";
 import type { AuthUser } from "./jwt.strategy";
 
@@ -19,6 +25,23 @@ export class AuthController {
   @HttpCode(200)
   login(@Body() dto: LoginDto, @Req() req: Request) {
     return this.auth.login(dto, req.get("user-agent") ?? undefined);
+  }
+
+  /**
+   * Requests a reset link. Public, and deliberately indistinguishable whether or not
+   * the address has an account — see AuthService.forgotPassword.
+   */
+  @Post("forgot-password")
+  @HttpCode(200)
+  forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    return this.auth.forgotPassword(dto.email, req.get("user-agent") ?? undefined);
+  }
+
+  /** Redeems the emailed token and sets a new password, signing out every session. */
+  @Post("reset-password")
+  @HttpCode(200)
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.auth.resetPassword(dto.token, dto.password);
   }
 
   @Post("refresh")

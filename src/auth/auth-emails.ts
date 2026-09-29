@@ -44,3 +44,75 @@ export async function sendWelcomeEmail(
     // EmailService logs its own failures; swallowing here keeps signup atomic.
   }
 }
+
+/**
+ * The reset link itself.
+ *
+ * Sent only to an address that actually has an account — but the endpoint that triggers
+ * it answers identically either way, so an attacker cannot use it to discover who is
+ * registered. The link carries the single-use token; the token is never stored in
+ * plaintext anywhere, so this email is the only copy of it in existence.
+ *
+ * Never throws, for the same reason as the welcome email: the caller has already
+ * written the token row, and it must not be rolled back by a mail provider.
+ */
+export async function sendPasswordResetEmail(
+  email: EmailService,
+  frontendUrl: string,
+  to: string,
+  token: string,
+  ttlMinutes: number,
+): Promise<void> {
+  const link = `${frontendUrl}/reset-password?token=${encodeURIComponent(token)}`;
+  try {
+    await email.send(
+      to,
+      "Reset your Endeleo password",
+      emailShell({
+        heading: "Reset your password",
+        bodyHtml: `
+          <p>We received a request to reset the password for this Endeleo account.</p>
+          <p>This link works once and expires in ${ttlMinutes} minutes.</p>
+          <p style="color:#4a5049;font-size:13px;">If you did not ask for this, you can ignore
+             this email — your password has not changed, and the link above will expire on its
+             own. Nobody can see your existing password, including us.</p>`,
+        ctaLabel: "Choose a new password",
+        ctaHref: link,
+      }),
+    );
+  } catch {
+    // EmailService logs its own failures.
+  }
+}
+
+/**
+ * Confirmation that a password actually changed.
+ *
+ * Separate from the reset link on purpose: this one is the alarm. If it arrives and the
+ * recipient did nothing, their email account is compromised, not just their password —
+ * so it says that rather than congratulating them.
+ */
+export async function sendPasswordChangedEmail(
+  email: EmailService,
+  frontendUrl: string,
+  to: string,
+): Promise<void> {
+  try {
+    await email.send(
+      to,
+      "Your Endeleo password was changed",
+      emailShell({
+        heading: "Your password was changed",
+        bodyHtml: `
+          <p>The password on your Endeleo account has just been changed, and every signed-in
+             session has been signed out.</p>
+          <p><strong>If this was not you</strong>, someone has access to this email account —
+             reset your password again immediately and secure your email.</p>`,
+        ctaLabel: "Sign in",
+        ctaHref: `${frontendUrl}/auth`,
+      }),
+    );
+  } catch {
+    // EmailService logs its own failures.
+  }
+}
