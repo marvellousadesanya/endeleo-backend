@@ -67,18 +67,29 @@ async function main() {
   const effectiveRoles = roles ?? (existing ? undefined : (["investor"] as Role[]));
   const effectiveKyc = kyc ?? (existing ? undefined : ("verified" as KycStatus));
 
+  // KYC is two fields on two models and both have to move together. profiles.kyc_status
+  // is what the UI prints; users.kyc_tier is what the subscription and market gates
+  // actually compare against (bonds.kyc_tier_required defaults to 1). Setting only the
+  // status produced a dev account that displayed "Verified" and was refused by every
+  // bond with "This bond requires KYC tier 1" — an afternoon lost to a seeder, not a bug
+  // in the product. ProfilesService.submitKyc sets both for real users; so does this now.
+  const kycStatus = effectiveKyc ?? "verified";
+  const kycTier = kycStatus === "verified" ? 1 : 0;
+
   const user = await prisma.user.upsert({
     where: { email },
     create: {
       email,
       fullName: "Dev Tester",
+      kycTier,
       credential: { create: { passwordHash } },
-      profile: { create: { kycStatus: effectiveKyc ?? "verified", currencyPref: "NGN" } },
+      profile: { create: { kycStatus, currencyPref: "NGN" } },
     },
     update: {
       credential: { upsert: { create: { passwordHash }, update: { passwordHash } } },
       ...(effectiveKyc
         ? {
+            kycTier,
             profile: {
               upsert: {
                 create: { kycStatus: effectiveKyc, currencyPref: "NGN" },
