@@ -86,12 +86,13 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  credential     UserCredential?
-  identities     UserIdentity[]
-  roles          UserRoleAssignment[]
-  refreshTokens  RefreshToken[]
-  exchangeCodes  OAuthExchangeCode[]
-  passwordResets PasswordResetToken[]
+  credential      UserCredential?
+  identities      UserIdentity[]
+  roles           UserRoleAssignment[]
+  refreshTokens   RefreshToken[]
+  exchangeCodes   OAuthExchangeCode[]
+  passwordResets  PasswordResetToken[]
+  moduleApprovals SubmissionModuleApproval[]
 
   issuedBonds      Bond[]                @relation("BondIssuer")
   subscriptions    Subscription[]
@@ -943,7 +944,8 @@ model ProjectSubmission {
   bondId String? @unique @map("bond_id") @db.Uuid
   bond   Bond?   @relation(fields: [bondId], references: [id], onDelete: SetNull)
 
-  cashflows SubmissionCashflow[]
+  cashflows       SubmissionCashflow[]
+  moduleApprovals SubmissionModuleApproval[]
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
@@ -952,6 +954,34 @@ model ProjectSubmission {
 
 /// One year of a submission's projected cashflow. Year-by-year rather than a JSON
 /// blob so the DSCR calculator can query and order by year directly.
+/// A signed-off stage of the arrangement pipeline.
+///
+/// The seven modules each produce something a person has to stand behind before the deal
+/// moves on — the feasibility verdict, the recommended structure, the indicative price.
+/// The design this is modelled on drew those gates as buttons with no handler; this is
+/// the record behind them.
+///
+/// One row per (submission, module). Approving twice replaces the row rather than
+/// stacking, and revoking deletes it: the question a reviewer asks is "is this signed,
+/// by whom, when", not "how many times has it been signed".
+model SubmissionModuleApproval {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submissionId String   @map("submission_id") @db.Uuid
+  /// "m1" … "m7". Kept as text rather than an enum so adding a stage needs no migration.
+  module       String   @db.VarChar(4)
+  approvedById String   @map("approved_by_id") @db.Uuid
+  approvedAt   DateTime @default(now()) @map("approved_at") @db.Timestamptz(6)
+  /// Why it was signed, or what it was signed subject to.
+  note         String?
+
+  submission ProjectSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  approvedBy User              @relation(fields: [approvedById], references: [id], onDelete: Restrict)
+
+  @@unique([submissionId, module])
+  @@index([submissionId])
+  @@map("submission_module_approvals")
+}
+
 model SubmissionCashflow {
   id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   submissionId String   @map("submission_id") @db.Uuid

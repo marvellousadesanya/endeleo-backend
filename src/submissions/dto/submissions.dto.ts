@@ -95,3 +95,10 @@ export class PromoteSubmissionDto {
   @IsString() subscriptionOpenAt!: string;
   @IsString() subscriptionCloseAt!: string;
 }
+
+export class ApproveModuleDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  note?: string;
+}

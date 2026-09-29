@@ -14,6 +14,7 @@ import { emailShell } from "@/email/email-templates";
 import { naira } from "@/email/money-format";
 import type { CreateBondDto } from "@/bonds/dto/bonds.dto";
 import type { CreateSubmissionDto, PromoteSubmissionDto, ReviewSubmissionDto } from "./dto/submissions.dto";
+import { canApprove, cascadeRevoke, isGatedModule, type GatedModule } from "./module-gates";
 
 /** Shape stored in the attachments JSON column. */
 interface StoredAttachment {
@@ -191,6 +192,76 @@ export class SubmissionsService {
       orderBy: { createdAt: "desc" },
     });
     return rows.map((r) => this.withCoverUrl(r));
+  }
+
+  // ---- Module sign-off ------------------------------------------------------
+
+  /** Which stages of this deal are signed, and by whom. */
+  async moduleApprovals(submissionId: string) {
+    return this.prisma.submissionModuleApproval.findMany({
+      where: { submissionId },
+      orderBy: { approvedAt: "asc" },
+      select: {
+        module: true,
+        approvedAt: true,
+        note: true,
+        approvedBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+  }
+
+  /**
+   * Sign off a stage.
+   *
+   * Refuses out of order: a stage cannot be signed until the one before it is, because
+   * approving a structure whose feasibility nobody has read certifies a conclusion
+   * without its premise.
+   */
+  async approveModule(
+    submissionId: string,
+    module: string,
+    actorId: string,
+    note?: string,
+  ) {
+    if (!isGatedModule(module)) {
+      throw new BadRequestException(`${module} is not a stage that carries a sign-off`);
+    }
+    const submission = await this.findRaw(submissionId);
+    if (submission.status === "promoted") {
+      throw new BadRequestException("This deal has already been promoted to a bond");
+    }
+
+    const approved = (await this.moduleApprovals(submissionId)).map((a) => a.module);
+    if (approved.includes(module)) {
+      throw new BadRequestException("That stage is already signed off");
+    }
+    if (!canApprove(module, approved)) {
+      throw new BadRequestException(
+        "An earlier stage has not been signed off yet — sign them in order",
+      );
+    }
+
+    await this.prisma.submissionModuleApproval.create({
+      data: { submissionId, module, approvedById: actorId, note: note || null },
+    });
+    return this.moduleApprovals(submissionId);
+  }
+
+  /**
+   * Withdraw a sign-off, and every sign-off downstream of it.
+   *
+   * Sending feasibility back for a re-run has to unsign the structure and the price too,
+   * or they keep reading as approved while the premise they rest on has been withdrawn.
+   */
+  async revokeModule(submissionId: string, module: string) {
+    if (!isGatedModule(module)) {
+      throw new BadRequestException(`${module} is not a stage that carries a sign-off`);
+    }
+    const cascade: GatedModule[] = cascadeRevoke(module);
+    await this.prisma.submissionModuleApproval.deleteMany({
+      where: { submissionId, module: { in: cascade } },
+    });
+    return this.moduleApprovals(submissionId);
   }
 
   /** Raw row, coverImagePath intact — for internal use (review, promote) only. */
