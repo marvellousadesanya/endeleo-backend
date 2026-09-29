@@ -13,6 +13,7 @@ import type { Prisma } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { EmailService } from "@/email/email.service";
 import { emailShell } from "@/email/email-templates";
+import { majorAmount } from "@/email/money-format";
 import { PaystackService } from "./paystack.service";
 
 @Injectable()
@@ -468,17 +469,11 @@ export class WalletService {
   }
 
   private majorAmount(amountMinor: bigint): string {
-    return (Number(amountMinor) / 100).toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    return majorAmount(amountMinor);
   }
 
   private describe(kind: string, amountMinor: bigint, method: string, note: string) {
-    const major = (Number(amountMinor) / 100).toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    const major = majorAmount(amountMinor);
     return kind === "deposit"
       ? `₦${major} added to your wallet via ${method}.`
       : `₦${major} sent to ${note} via ${method}.`;
