@@ -3,6 +3,7 @@ import { BadRequestException, Injectable, NotFoundException, UnauthorizedExcepti
 import { ConfigService } from "@nestjs/config";
 import * as QRCode from "qrcode";
 import { PrismaService } from "@/database/prisma.service";
+import { NotificationsService } from "@/notifications/notifications.service";
 import { codeForStep, currentStep, generateSecret, otpauthUri, verifyCode } from "./totp";
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -14,7 +15,46 @@ export class MfaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /**
+   * Security changes are told to the account holder, always.
+   *
+   * The point is not to be helpful — it is that someone who did not make this change
+   * finds out that it happened. That only works if it is sent unconditionally and
+   * cannot be turned off, so it does not consult notification preferences.
+   */
+  private async alertSecurityChange(userId: string, enabled: boolean) {
+    const frontendUrl = this.config.get<string>("FRONTEND_URL") ?? "";
+    await this.notifications
+      .notify({
+        userId,
+        title: enabled
+          ? "Two-factor authentication enabled"
+          : "Two-factor authentication removed",
+        body: enabled
+          ? "An authenticator app was added to your account."
+          : "An authenticator app was removed from your account.",
+        href: "/dashboard/security",
+        email: {
+          subject: enabled
+            ? "Two-factor authentication was enabled on your account"
+            : "Two-factor authentication was removed from your account",
+          bodyHtml: enabled
+            ? `<p>An authenticator app was added to your Endeleo account. You will be asked ` +
+              `for a code from it the next time you sign in.</p>` +
+              `<p>If this was not you, remove it and change your password immediately.</p>`
+            : `<p>An authenticator app was removed from your Endeleo account. Signing in now ` +
+              `requires only your password.</p>` +
+              `<p><strong>If this was not you, your account may be compromised.</strong> ` +
+              `Change your password and re-enable two-factor authentication now.</p>`,
+          ctaLabel: "Review security settings",
+          ctaHref: `${frontendUrl}/dashboard/security`,
+        },
+      })
+      .catch(() => {});
+  }
 
   /** Only verified factors count — a pending enrolment must not lock anyone out. */
   async hasVerifiedFactor(userId: string): Promise<boolean> {
@@ -82,12 +122,16 @@ export class MfaService {
         lastUsedStep: BigInt(result.step ?? currentStep()),
       },
     });
+
+    void this.alertSecurityChange(userId, true);
     return { ok: true };
   }
 
   async unenroll(userId: string, factorId: string) {
     const result = await this.prisma.mfaFactor.deleteMany({ where: { id: factorId, userId } });
     if (result.count === 0) throw new NotFoundException("Factor not found");
+
+    void this.alertSecurityChange(userId, false);
     return { ok: true };
   }
 
