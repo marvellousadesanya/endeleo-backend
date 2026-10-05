@@ -21,6 +21,7 @@ import { SponsorPortalModule } from "@/sponsor-portal/sponsor-portal.module";
 import { EmailModule } from "@/email/email.module";
 import { NotificationsModule } from "@/notifications/notifications.module";
 import { ArrangementAiModule } from "./arrangement-ai/arrangement-ai.module";
+import { MacroModule } from "./macro/macro.module";
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { ArrangementAiModule } from "./arrangement-ai/arrangement-ai.module";
     EmailModule,
     NotificationsModule,
     ArrangementAiModule,
+    MacroModule,
     SchedulerModule,
     UsersModule,
     AuditModule,

@@ -9,6 +9,7 @@ import { buildDscrTable, scoreBankability, type CashflowYear } from "./feasibili
 import { recommendStructure } from "./structuring";
 import { recommendPricing } from "./pricing";
 import { ArrangementAiService, type AiOpinion } from "@/arrangement-ai/arrangement-ai.service";
+import { MacroService, realRatePct } from "@/macro/macro.service";
 
 @Injectable()
 export class ArrangementService {
@@ -16,6 +17,7 @@ export class ArrangementService {
 
   constructor(
     private readonly ai: ArrangementAiService,
+    private readonly macro: MacroService,
     private readonly prisma: PrismaService,
     config: ConfigService,
   ) {
@@ -67,8 +69,29 @@ export class ArrangementService {
     // computed figures and the AI arrives from its own endpoint.
     const stored = await this.storedOpinions(submissionId, submission.updatedAt);
 
+    // Free, annual, and cached for a day — it cannot hold up the screen, and the screen
+    // is complete without it. What it adds is somewhere to stand: a coupon means little
+    // without the inflation it has to beat.
+    const macro = await this.macro.nigeria();
+    const latestInflation = macro?.inflation[0];
+    const realCouponPct =
+      latestInflation !== undefined
+        ? realRatePct(pricing.recommendedCouponBps / 100, latestInflation.value)
+        : null;
+
     return {
       submissionId: submission.id,
+      macro: macro
+        ? {
+            inflation: macro.inflation,
+            fx: macro.fx,
+            gdpGrowth: macro.gdpGrowth,
+            fetchedAt: macro.fetchedAt,
+            source: macro.source,
+            /** The recommended coupon after inflation, on the latest reading. */
+            realCouponPct,
+          }
+        : null,
       aiEnabled: this.ai.enabled,
       aiStale: this.ai.enabled && stored.size === 0,
       feasibility: { dscrTable, bankability, ai: stored.get("m2") ?? null },
@@ -108,6 +131,10 @@ export class ArrangementService {
    */
   async aiOpinionsFor(submissionId: string) {
     const screen = await this.computeFor(submissionId);
+    // The prompts used to say "you have no comparables to price against" and leave it
+    // there. They still have no comparables — there are no closed deals — but inflation
+    // and the naira are knowable, and a model reasoning without them is guessing.
+    const macro = screen.macro;
     const submission = await this.prisma.projectSubmission.findUniqueOrThrow({
       where: { id: submissionId },
       select: { updatedAt: true, sector: true, revenueModel: true },
@@ -122,6 +149,9 @@ export class ArrangementService {
         label: "M2 Feasibility & Bankability",
         task: "Judge whether this project can service the debt it is asking for, and what a credit committee would ask next. `value` is your own bankability score out of 100.",
         facts: {
+          nigerianMacro: macro
+            ? { inflationAnnualPct: macro.inflation.slice(0, 5), ngnPerUsd: macro.fx.slice(0, 5) }
+            : null,
           dscrTable: screen.feasibility.dscrTable,
           computedScore: screen.feasibility.bankability.score,
           computedRecommendation: screen.feasibility.bankability.recommendation,
@@ -143,7 +173,16 @@ export class ArrangementService {
           computedPricing: screen.pricing,
           bankabilityScore: screen.feasibility.bankability.score,
           sector: submission.sector,
-          note: "The benchmark is a manually configured placeholder, not a live FGN or FMDQ yield, and there is no closed-deal history to compare against.",
+          nigerianMacro: macro
+            ? {
+                inflationAnnualPct: macro.inflation.slice(0, 5),
+                ngnPerUsd: macro.fx.slice(0, 5),
+                gdpGrowthPct: macro.gdpGrowth.slice(0, 5),
+                recommendedCouponRealPct: macro.realCouponPct,
+                source: macro.source,
+              }
+            : null,
+          note: "The benchmark is a manually configured placeholder, not a live FGN or FMDQ yield, and there is no closed-deal history to compare against. The macro series above are annual World Bank figures — use them to judge whether the coupon is plausible in real terms, not as a substitute for a market yield.",
         },
       },
     ].filter((w) => !stored.has(w.module));
