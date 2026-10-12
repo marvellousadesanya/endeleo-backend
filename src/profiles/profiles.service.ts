@@ -17,7 +17,7 @@ const RETAIL_DOC_KEYS = ["id_document", "proof_of_address"] as const;
 const INSTITUTIONAL_DOC_KEYS = [
   "certificate_of_incorporation",
   "proof_of_address",
-  "director_id",
+  "directors_id",
 ] as const;
 
 @Injectable()
