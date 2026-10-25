@@ -115,8 +115,17 @@ export class ActivationService {
     const now = opts.asOf ? new Date(`${opts.asOf}T23:59:59.999Z`) : new Date();
     const summary: TransitionSummary = { closedUnfunded: [], closedSubscribed: [], activated: [], failures: [] };
 
+    // A bond whose window has passed stays open while any subscription is still pending:
+    // allocate_subscription only allocates into an open bond, and pending money is not
+    // yet in raisedMinor. Closing it now would count a funded bond as unfunded and strand
+    // that escrow. New subscriptions are already refused by the window date itself; this
+    // only lets the last cooling-offs finish, at most 48 hours, before the bond closes.
     const expiring = await this.prisma.bond.findMany({
-      where: { status: "open", subscriptionCloseAt: { lt: now } },
+      where: {
+        status: "open",
+        subscriptionCloseAt: { lt: now },
+        subscriptions: { none: { status: "pending" } },
+      },
       select: { id: true, raisedMinor: true },
     });
 

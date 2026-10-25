@@ -11,12 +11,14 @@ import { ForbiddenException, Injectable, Logger, NotFoundException } from "@nest
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
 import { ActivationService } from "./activation.service";
+import { AllocationRunnerService } from "./allocation-runner.service";
 import { CouponRunnerService } from "./coupon-runner.service";
 import { RedemptionRunnerService } from "./redemption-runner.service";
 import { addMonths, parseDateOnly, toDateOnly } from "./schedule";
 
 export interface EngineStep {
   asOf: string;
+  allocations: { allocated: number; refunded: number; refundFailed: number };
   transitions: { closed: number; subscribed: number; activated: number };
   coupons: { created: number; paid: number; failed: number; escalated: number };
   redemption: { processed: number; defaulted: number; principalPaid: number };
@@ -42,6 +44,7 @@ export class SimulationService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly allocation: AllocationRunnerService,
     private readonly activation: ActivationService,
     private readonly coupons: CouponRunnerService,
     private readonly redemption: RedemptionRunnerService,
@@ -63,6 +66,7 @@ export class SimulationService {
     // Order is load-bearing. Activation creates the schedules the rest read; the
     // default check must precede the coupon pass so a defaulting bond pays nothing
     // today; the maturity payout must follow it so the final coupon is not skipped.
+    const allocations = await this.allocation.run({ asOf });
     const transitions = await this.activation.runTransitions({ asOf });
     const checks = await this.redemption.runChecks(asOf);
     const coupons = await this.coupons.run(asOf);
@@ -75,6 +79,11 @@ export class SimulationService {
 
     return {
       asOf,
+      allocations: {
+        allocated: allocations.allocated.length,
+        refunded: allocations.refunded.length,
+        refundFailed: allocations.refundFailed.length,
+      },
       transitions: {
         closed: transitions.closedUnfunded.length,
         subscribed: transitions.closedSubscribed.length,

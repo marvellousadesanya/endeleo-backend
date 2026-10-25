@@ -11,6 +11,7 @@ import { NotificationsService } from "@/notifications/notifications.service";
 import { naira } from "@/email/money-format";
 import { PaymentAdapter } from "./adapters/payment.adapter";
 import { toMinor } from "./dto/bonds.dto";
+import { refundEscrowAndRecord } from "./escrow-refund";
 
 /** Investors get 48 hours to change their mind. */
 const COOLING_OFF_HOURS = 48;
@@ -126,8 +127,11 @@ export class SubscriptionsService {
     return subscription;
   }
 
-  /** Admin action. Capacity and the concentration cap are checked inside the procedure. */
-  async allocate(subscriptionId: string, actorId: string) {
+  /**
+   * Run by the allocation runner once cooling-off ends, or by an admin. Capacity and the
+   * concentration cap are checked inside the procedure.
+   */
+  async allocate(subscriptionId: string, _actorId?: string) {
     try {
       const [holding] = await this.prisma.$queryRaw<
         { id: string; bond_id: string; user_id: string; units_minor: bigint }[]
@@ -168,22 +172,17 @@ export class SubscriptionsService {
     }
 
     if (cancelled?.escrow_reference) {
-      try {
-        await this.payments.refundEscrow({
+      const refunded = await refundEscrowAndRecord(
+        { payments: this.payments, audit: this.audit },
+        {
+          subscriptionId,
+          bondId: cancelled.bond_id,
           userId: subscription.userId,
           amountMinor: cancelled.amount_minor,
           reference: cancelled.escrow_reference,
-        });
-        await this.audit.record({
-          bondId: cancelled.bond_id, userId: subscription.userId, event: "funds_refunded",
-          payload: { subscriptionId, amountMinor: cancelled.amount_minor.toString() },
-        });
-      } catch (e) {
-        // The unwind stands. Flag the stuck refund rather than losing it silently.
-        await this.audit.record({
-          bondId: cancelled.bond_id, userId: subscription.userId, event: "funds_refunded",
-          payload: { subscriptionId, failed: true, error: e instanceof Error ? e.message : String(e) },
-        });
+        },
+      );
+      if (!refunded) {
         throw new BadRequestException("Units were returned but the refund failed. Support has been notified.");
       }
     }

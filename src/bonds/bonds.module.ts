@@ -10,6 +10,7 @@ import { SimulationController } from "./simulation.controller";
 import { SubscriptionsController } from "./subscriptions.controller";
 import { SubscriptionsService } from "./subscriptions.service";
 import { ActivationService } from "./engine/activation.service";
+import { AllocationRunnerService } from "./engine/allocation-runner.service";
 import { CouponRunnerService } from "./engine/coupon-runner.service";
 import { RedemptionRunnerService } from "./engine/redemption-runner.service";
 import { SimulationService } from "./engine/simulation.service";
@@ -29,6 +30,7 @@ import { EngineTick } from "./engine/engine.tick";
     SubscriptionsService,
     MarketService,
     ReportsService,
+    AllocationRunnerService,
     ActivationService,
     CouponRunnerService,
     RedemptionRunnerService,

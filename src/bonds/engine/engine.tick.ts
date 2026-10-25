@@ -7,6 +7,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { JobLockService } from "@/scheduler/job-lock.service";
 import { ActivationService } from "./activation.service";
+import { AllocationRunnerService } from "./allocation-runner.service";
 import { CouponRunnerService } from "./coupon-runner.service";
 import { RedemptionRunnerService } from "./redemption-runner.service";
 
@@ -16,6 +17,7 @@ export class EngineTick {
 
   constructor(
     private readonly locks: JobLockService,
+    private readonly allocation: AllocationRunnerService,
     private readonly activation: ActivationService,
     private readonly coupons: CouponRunnerService,
     private readonly redemption: RedemptionRunnerService,
@@ -24,9 +26,11 @@ export class EngineTick {
   @Cron(CronExpression.EVERY_HOUR, { name: "bond-engine-tick" })
   async run(): Promise<void> {
     await this.locks.withLock("bond-engine-tick", 900, async () => {
-      // Ordered deliberately: closing windows and activating bonds creates the coupon
-      // and redemption rows the next two passes read. Running them together would leave
-      // a freshly activated bond unprocessed for an hour.
+      // Ordered deliberately. Allocation goes first so raisedMinor is true before any
+      // window is closed on it. Closing windows and activating bonds then creates the
+      // coupon and redemption rows the next two passes read. Running them together would
+      // leave a freshly activated bond unprocessed for an hour.
+      const allocations = await this.allocation.run();
       const transitions = await this.activation.runTransitions();
       // The default check runs before coupons so a bond found to be in default today
       // does not disburse today's interest; the maturity payout runs after, so the
@@ -40,10 +44,13 @@ export class EngineTick {
       };
 
       const touched =
+        allocations.allocated.length + allocations.refunded.length + allocations.refundFailed.length +
         transitions.activated.length + coupons.paid + coupons.failed + redemption.processed;
       if (touched > 0) {
         this.logger.log(
-          `activated ${transitions.activated.length}, coupons paid ${coupons.paid} ` +
+          `allocated ${allocations.allocated.length}, refunded ${allocations.refunded.length} ` +
+            `(refund failed ${allocations.refundFailed.length}), ` +
+            `activated ${transitions.activated.length}, coupons paid ${coupons.paid} ` +
             `(failed ${coupons.failed}, escalated ${coupons.escalated}), ` +
             `redemption events ${redemption.processed}`,
         );
