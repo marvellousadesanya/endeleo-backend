@@ -91,8 +91,10 @@ export class AllocationRunnerService {
       }
     }
 
-    if (summary.failures.length > 0) {
-      this.logger.error(`allocation failed for ${summary.failures.length} subscription(s); retrying next tick`);
+    // One line per failure, with the reason. The procedure's own audit row rolls back with
+    // the failed allocation, so this log is the only place the cause is recorded.
+    for (const f of summary.failures) {
+      this.logger.error(`allocation failed for subscription ${f.subscriptionId}; retrying next tick: ${f.error}`);
     }
     return summary;
   }
