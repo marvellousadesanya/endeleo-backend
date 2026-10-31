@@ -86,10 +86,22 @@ export class MarketService {
     }
   }
 
+  /**
+   * Listings a buyer could act on. Nothing ever flips a listing to "expired", so a lapsed
+   * one is filtered out here rather than shown and then refused with LISTING_EXPIRED.
+   * The bond's status rides along because execute_trade refuses a bond that is not yet
+   * subscribed or active, and the page should say so before the investor clicks Buy.
+   */
   activeListings(bondId?: string) {
     return this.prisma.marketListing.findMany({
-      where: { status: "active", ...(bondId ? { bondId } : {}) },
-      include: { bond: { select: { id: true, title: true, isinRef: true, currency: true, couponRateBps: true } } },
+      where: {
+        status: "active",
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        ...(bondId ? { bondId } : {}),
+      },
+      include: {
+        bond: { select: { id: true, title: true, isinRef: true, currency: true, couponRateBps: true, status: true } },
+      },
       orderBy: { createdAt: "desc" },
     });
   }

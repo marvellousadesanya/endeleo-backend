@@ -198,6 +198,9 @@ export class SubscriptionsService {
             id: true, title: true, isinRef: true, currency: true, status: true,
             couponRateBps: true, couponFrequency: true, maturityDate: true,
             tenorMonths: true, projectSlug: true, spvReference: true,
+            // The dashboard's sector chart groups by this. Without it every pending
+            // subscription fell into "Other", so the chart read 100% for most investors.
+            sector: true,
           },
         },
       },
