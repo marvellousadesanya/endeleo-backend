@@ -232,6 +232,7 @@ export function mapProcedureError(e: unknown): Error {
     "INSUFFICIENT_UNITS_TO_REVERSE", "LISTING_NOT_FOUND", "LISTING_NOT_ACTIVE",
     "LISTING_EXPIRED", "UNITS_EXCEED_LISTING", "SELF_TRADE_FORBIDDEN",
     "BOND_NOT_TRADEABLE", "SELLER_INSUFFICIENT_UNITS", "UNITS_MUST_BE_POSITIVE",
+    "INSUFFICIENT_FUNDS", "WALLET_CURRENCY_MISMATCH",
   ];
   const match = known.find((code) => raw.includes(code));
   return match ? new BadRequestException(match) : (e as Error);
