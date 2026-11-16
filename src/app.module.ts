@@ -18,6 +18,7 @@ import { SubmissionsModule } from "@/submissions/submissions.module";
 import { SchedulerModule } from "@/scheduler/scheduler.module";
 import { UsersModule } from "@/users/users.module";
 import { SponsorPortalModule } from "@/sponsor-portal/sponsor-portal.module";
+import { WatchlistModule } from "@/watchlist/watchlist.module";
 import { EmailModule } from "@/email/email.module";
 import { NotificationsModule } from "@/notifications/notifications.module";
 import { ArrangementAiModule } from "./arrangement-ai/arrangement-ai.module";
@@ -51,6 +52,7 @@ import { MacroModule } from "./macro/macro.module";
     ContentModule,
     SubmissionsModule,
     SponsorPortalModule,
+    WatchlistModule,
     HealthModule,
   ],
 })

@@ -109,6 +109,7 @@ model User {
   wallet           Wallet?
   walletTxs        WalletTransaction[]
   notifications    Notification[]
+  watchlist        WatchlistItem[]
   referralsMade    ReferralAttribution[] @relation("ReferralReferrer")
   referredAs       ReferralAttribution?  @relation("ReferralReferee")
   posts            Post[]
@@ -403,6 +404,7 @@ model Bond {
   checklistItems    SponsorChecklistItem[]
   agreements        SponsorAgreement[]
   fundingMilestones FundingMilestone[]
+  watchers          WatchlistItem[]
   /// The sponsor submission this bond was promoted from, if any — admin-created bonds
   /// have none.
   submission        ProjectSubmission?
@@ -772,6 +774,24 @@ model WalletTransaction {
 
   @@index([userId, createdAt])
   @@map("wallet_transactions")
+}
+
+/// A bond an investor has starred to keep an eye on. Just the pairing — the bond's own
+/// row carries everything shown about it.
+model WatchlistItem {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  bondId    String   @map("bond_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bond Bond @relation(fields: [bondId], references: [id], onDelete: Cascade)
+
+  /// Starring twice is a no-op, not a second row.
+  @@unique([userId, bondId])
+  /// "Who watches this bond?" — for notifying watchers when it changes.
+  @@index([bondId])
+  @@map("watchlist_items")
 }
 
 model Notification {
