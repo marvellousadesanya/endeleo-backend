@@ -36,6 +36,10 @@ export class BondsService {
     if (new Date(dto.subscriptionCloseAt) <= new Date(dto.subscriptionOpenAt)) {
       throw new BadRequestException("subscriptionCloseAt must be after subscriptionOpenAt");
     }
+    // The DTO already requires it on the HTTP path; this also covers callers that build a
+    // CreateBondDto in code (promoting a submission) and never pass the validation pipe.
+    const sector = dto.sector?.trim();
+    if (!sector) throw new BadRequestException("A sector is required");
 
     const bond = await this.prisma.bond.create({
       data: {
@@ -59,7 +63,7 @@ export class BondsService {
         issueDate: dto.issueDate ? new Date(dto.issueDate) : null,
         maturityDate: dto.maturityDate ? new Date(dto.maturityDate) : null,
         location: dto.location ?? null,
-        sector: dto.sector ?? null,
+        sector,
         summary: dto.summary ?? null,
         overview: dto.overview ?? null,
         highlights: dto.highlights ?? [],

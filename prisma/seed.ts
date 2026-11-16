@@ -41,8 +41,9 @@ type Seed = {
   closesInDays: number;
 };
 
-// Project slugs match src/lib/projects.ts in the frontend, which supplies the imagery,
-// sector tag and location for each card. A bond with no slug renders without any of that.
+// Each bond carries its own sector and location (see STORY below). The frontend used to
+// fill them in from a projects.ts fixture keyed on the slug; that fallback is gone, so a
+// bond without them shows no sector tag and lands under "Other" in the sector chart.
 const BONDS: Seed[] = [
   { isinRef: "ENDSPVLAGSOL", projectSlug: "lagos-solar", title: "Lagos Solar Distribution Bond",
     spvReference: "SPV-LAG-SOLAR-01", sizeNaira: 2_500_000_000, minimumNaira: 250_000,
@@ -85,6 +86,20 @@ const BONDS: Seed[] = [
     filled: 0.58, tenorMonths: 36, couponRateBps: 1520, closesInDays: 15 },
 ];
 
+/** Sector and location per project. Mirrored by migration 20261116190000_seed_bond_sectors. */
+const STORY: Record<string, { sector: string; location: string }> = {
+  "lagos-solar": { sector: "Energy", location: "Lagos State" },
+  "abuja-healthcare": { sector: "Healthcare", location: "Abuja" },
+  "ph-water": { sector: "Utilities", location: "Port Harcourt" },
+  "ibadan-edu": { sector: "Education", location: "Ibadan" },
+  "ng-highway": { sector: "Transport", location: "Nationwide" },
+  "kaduna-agri": { sector: "Agriculture", location: "Kaduna State" },
+  "lagos-housing": { sector: "Housing", location: "Lagos State" },
+  "obudu-tourism": { sector: "Tourism", location: "Cross River State" },
+  "lagos-waste": { sector: "Waste Management", location: "Lagos State" },
+  "abuja-sports": { sector: "Sports", location: "FCT — Abuja" },
+};
+
 async function main() {
   // The issuer is a real Endeleo user; prefer the dedicated test issuer if present.
   const issuer =
@@ -101,6 +116,8 @@ async function main() {
       title: b.title,
       spvReference: b.spvReference,
       projectSlug: b.projectSlug,
+      sector: STORY[b.projectSlug]?.sector ?? null,
+      location: STORY[b.projectSlug]?.location ?? null,
       issuerId: issuer.id,
       currency: "NGN" as Currency,
       totalSizeMinor,

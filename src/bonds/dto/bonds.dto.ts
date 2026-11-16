@@ -42,9 +42,14 @@ export class CreateBondDto {
   @IsOptional() @IsDateString() maturityDate?: string;
 
   // ---- Investor-facing project content ----------------------------------------
-  // All optional. A bond with none of it falls back to the frontend fixture by slug.
+  // Optional except sector. There is no frontend fallback any more, so whatever is left
+  // out simply isn't shown.
   @IsOptional() @IsString() @MaxLength(120) location?: string;
-  @IsOptional() @IsString() @MaxLength(120) sector?: string;
+  /**
+   * Required: the investor's sector-allocation chart groups by it, and a bond without one
+   * lands under "Other". It can't be edited after creation yet, so it has to be right here.
+   */
+  @IsString() @Length(2, 120) sector!: string;
   @IsOptional() @IsString() @MaxLength(280) summary?: string;
   @IsOptional() @IsString() @MaxLength(5000) overview?: string;
 

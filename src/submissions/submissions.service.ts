@@ -483,6 +483,12 @@ export class SubmissionsService {
     if (tenorMonths == null) throw new BadRequestException("tenorMonths is required");
     const couponRateBps = dto.couponRateBps ?? submission.expectedReturnBps;
     if (couponRateBps == null) throw new BadRequestException("couponRateBps is required");
+    // The submission form requires a sector, so this only catches rows from before it did.
+    if (!submission.sector?.trim()) {
+      throw new BadRequestException(
+        "This submission has no sector. Ask the sponsor to add one before promoting it.",
+      );
+    }
 
     const bondDto: CreateBondDto = {
       title: submission.projectTitle,
@@ -496,7 +502,7 @@ export class SubmissionsService {
       subscriptionOpenAt: dto.subscriptionOpenAt,
       subscriptionCloseAt: dto.subscriptionCloseAt,
       location: submission.locationState ?? undefined,
-      sector: submission.sector ?? undefined,
+      sector: submission.sector,
       summary: submission.summary || undefined,
     };
 
