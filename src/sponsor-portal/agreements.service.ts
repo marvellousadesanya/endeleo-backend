@@ -1,12 +1,13 @@
 // Legal documents a sponsor must sign — NDA, mandate letter, term sheet... Admin
 // uploads and sends one; the sponsor signs it, on the record, same trust model as the
 // investor data room's signature wall.
-import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
 import { StorageService } from "@/storage/storage.service";
 import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
+import { assertOwnsBond } from "@/bonds/bond-ownership";
 import type { SignAgreementDto, UpsertAgreementDto } from "./dto/agreements.dto";
 
 @Injectable()
@@ -22,15 +23,9 @@ export class AgreementsService {
     this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
   }
 
-  private async assertOwnsBond(user: AuthUser, bondId: string) {
-    if (user.roles.includes("admin")) return;
-    const bond = await this.prisma.bond.findUnique({ where: { id: bondId }, select: { issuerId: true } });
-    if (!bond) throw new NotFoundException("Bond not found");
-    if (bond.issuerId !== user.id) throw new ForbiddenException("Not your bond");
-  }
 
   async listForSponsor(user: AuthUser, bondId: string) {
-    await this.assertOwnsBond(user, bondId);
+    await assertOwnsBond(this.prisma, user, bondId);
     const rows = await this.prisma.sponsorAgreement.findMany({
       where: { bondId },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -49,7 +44,7 @@ export class AgreementsService {
   async createDownloadToken(user: AuthUser, id: string) {
     const doc = await this.prisma.sponsorAgreement.findUnique({ where: { id } });
     if (!doc) throw new NotFoundException("Agreement not found");
-    await this.assertOwnsBond(user, doc.bondId);
+    await assertOwnsBond(this.prisma, user, doc.bondId);
     if (!doc.filePath) throw new NotFoundException("No file attached to this agreement yet");
 
     const url = await this.storage.getDownloadUrl(doc.filePath, {
@@ -66,7 +61,7 @@ export class AgreementsService {
       include: { bond: { select: { title: true } } },
     });
     if (!doc) throw new NotFoundException("Agreement not found");
-    await this.assertOwnsBond(user, doc.bondId);
+    await assertOwnsBond(this.prisma, user, doc.bondId);
     if (doc.status === "signed") return doc;
 
     const signed = await this.prisma.sponsorAgreement.update({

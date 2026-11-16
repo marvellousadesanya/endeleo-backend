@@ -6,6 +6,7 @@ import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
 import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
+import { assertOwnsBond } from "@/bonds/bond-ownership";
 import type {
   AdminUpdateChecklistItemDto,
   CreateChecklistItemDto,
@@ -24,15 +25,9 @@ export class ChecklistService {
     this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
   }
 
-  private async assertOwnsBond(user: AuthUser, bondId: string) {
-    if (user.roles.includes("admin")) return;
-    const bond = await this.prisma.bond.findUnique({ where: { id: bondId }, select: { issuerId: true } });
-    if (!bond) throw new NotFoundException("Bond not found");
-    if (bond.issuerId !== user.id) throw new ForbiddenException("Not your bond");
-  }
 
   async listForSponsor(user: AuthUser, bondId: string, kind?: "compliance" | "due_diligence") {
-    await this.assertOwnsBond(user, bondId);
+    await assertOwnsBond(this.prisma, user, bondId);
     return this.prisma.sponsorChecklistItem.findMany({
       where: { bondId, kind },
       orderBy: [{ kind: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
@@ -91,7 +86,7 @@ export class ChecklistService {
   async updateAsSponsor(user: AuthUser, id: string, dto: SponsorUpdateChecklistItemDto) {
     const item = await this.prisma.sponsorChecklistItem.findUnique({ where: { id } });
     if (!item) throw new NotFoundException("Checklist item not found");
-    await this.assertOwnsBond(user, item.bondId);
+    await assertOwnsBond(this.prisma, user, item.bondId);
     // A rejected item needs admin's eyes again before it can move — sponsor resubmits
     // by going back to in_progress, never straight past a rejection to submitted twice.
     if (item.status === "verified") {

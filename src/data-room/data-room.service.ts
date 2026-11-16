@@ -1,17 +1,22 @@
 // Data room: gated documents, and the signature wall in front of some of them.
 //
-// Access rules, unchanged from the Supabase version but now enforced server-side:
+// Access rules, enforced server-side:
 //   • editors and admins see everything, published or not
+//   • a bond's issuer (its sponsor) sees everything for that bond, published or not,
+//     and never hits the signature wall — it's their own paperwork
 //   • verified investors see published documents only
 //   • a document marked requires_signature stays shut until that user has signed it
 import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "@/database/prisma.service";
 import { StorageService } from "@/storage/storage.service";
+import { isBondIssuer } from "@/bonds/bond-ownership";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import type { SignDocumentDto, UpsertDocumentDto } from "./dto/data-room.dto";
 
 export interface DataRoomAccess {
   isEditor: boolean;
+  /** Issued the bond being asked about. Always false for the general (bond-less) set. */
+  isIssuer: boolean;
   isVerifiedInvestor: boolean;
 }
 
@@ -26,26 +31,35 @@ export class DataRoomService {
     return user.roles.includes("admin") || user.roles.includes("editor");
   }
 
-  private async accessFor(user: AuthUser): Promise<DataRoomAccess> {
-    const profile = await this.prisma.profile.findUnique({
-      where: { userId: user.id },
-      select: { kycStatus: true },
-    });
+  private async accessFor(user: AuthUser, bondId: string | null | undefined): Promise<DataRoomAccess> {
+    const [profile, isIssuer] = await Promise.all([
+      this.prisma.profile.findUnique({
+        where: { userId: user.id },
+        select: { kycStatus: true },
+      }),
+      isBondIssuer(this.prisma, user, bondId),
+    ]);
     return {
       isEditor: this.isEditor(user),
+      isIssuer,
       isVerifiedInvestor: profile?.kycStatus === "verified",
     };
   }
 
+  /** Editors, and a bond's own sponsor, see past the published flag and the signature wall. */
+  private static seesEverything(access: DataRoomAccess): boolean {
+    return access.isEditor || access.isIssuer;
+  }
+
   /** Documents plus this user's signature on each, and what they are allowed to do. */
   async list(user: AuthUser, bondId?: string) {
-    const access = await this.accessFor(user);
+    const access = await this.accessFor(user, bondId);
 
     const documents = await this.prisma.dataRoomDocument.findMany({
       // bondId omitted means the general set, matching the previous `.is(null)` filter.
       where: {
         bondId: bondId ?? null,
-        ...(access.isEditor ? {} : { isPublished: true }),
+        ...(DataRoomService.seesEverything(access) ? {} : { isPublished: true }),
       },
       orderBy: [{ category: "asc" }, { sortOrder: "asc" }, { title: "asc" }],
       include: {
@@ -85,6 +99,7 @@ export class DataRoomService {
       where: { id: documentId },
       select: {
         id: true,
+        bondId: true,
         isPublished: true,
         requiresSignature: true,
         mimeType: true,
@@ -94,14 +109,15 @@ export class DataRoomService {
     });
     if (!doc) throw new NotFoundException("Document not found");
 
-    const access = await this.accessFor(user);
-    if (!access.isEditor && !access.isVerifiedInvestor) {
+    const access = await this.accessFor(user, doc.bondId);
+    const privileged = DataRoomService.seesEverything(access);
+    if (!privileged && !access.isVerifiedInvestor) {
       throw new ForbiddenException("Investor verification required");
     }
-    if (!doc.isPublished && !access.isEditor) {
+    if (!doc.isPublished && !privileged) {
       throw new ForbiddenException("Not available");
     }
-    if (doc.requiresSignature && !access.isEditor) {
+    if (doc.requiresSignature && !privileged) {
       const signature = await this.prisma.dataRoomSignature.findUnique({
         where: { documentId_userId: { documentId: doc.id, userId: user.id } },
       });

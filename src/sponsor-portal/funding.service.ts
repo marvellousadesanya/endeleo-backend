@@ -2,11 +2,12 @@
 // figures are real bond-engine numbers, not a separate ledger — this module only adds
 // the milestone schedule on top. Sponsors watch; only admin releases a milestone, same
 // as real disbursement always has a controller on the other side of it.
-import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/database/prisma.service";
 import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
+import { assertOwnsBond } from "@/bonds/bond-ownership";
 import type { CreateMilestoneDto, UpdateMilestoneDto } from "./dto/funding.dto";
 
 // Minor units → a plain "1,234,567" string — good enough for an email line; the app's
@@ -27,15 +28,9 @@ export class FundingService {
     this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
   }
 
-  private async assertOwnsBond(user: AuthUser, bondId: string) {
-    if (user.roles.includes("admin")) return;
-    const bond = await this.prisma.bond.findUnique({ where: { id: bondId }, select: { issuerId: true } });
-    if (!bond) throw new NotFoundException("Bond not found");
-    if (bond.issuerId !== user.id) throw new ForbiddenException("Not your bond");
-  }
 
   async overviewForSponsor(user: AuthUser, bondId: string) {
-    await this.assertOwnsBond(user, bondId);
+    await assertOwnsBond(this.prisma, user, bondId);
     const [bond, escrows, milestones] = await Promise.all([
       this.prisma.bond.findUnique({
         where: { id: bondId },
