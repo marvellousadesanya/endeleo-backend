@@ -14,8 +14,15 @@ const envSchema = z.object({
   JWT_ACCESS_TTL: z.string().default("15m"),
   JWT_REFRESH_TTL: z.string().default("30d"),
 
-  // Where the browser is sent back to after a social sign-in.
+  // The fallback for every link back to the frontend: social sign-in without a usable
+  // return_to, and any app below that is not set.
   FRONTEND_URL: z.string().url().default("http://localhost:8080"),
+  // One per frontend app; emailed links go to the app that owns their path (see
+  // config/app-urls.ts). Each falls back to FRONTEND_URL while unset.
+  INVESTOR_URL: z.string().url().optional(),
+  SPONSOR_URL: z.string().url().optional(),
+  ARRANGEMENT_URL: z.string().url().optional(),
+  ADMIN_URL: z.string().url().optional(),
   // This API's own public base URL — must match the redirect URI registered with Google.
   PUBLIC_API_URL: z.string().url().default("http://localhost:4000"),
 

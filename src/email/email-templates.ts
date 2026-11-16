@@ -1,6 +1,9 @@
 // One plain, on-brand wrapper around every email's actual content, so a new alert is
 // just a subject line and a couple of paragraphs, not a new HTML document.
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:8080";
+// The footer's Settings link lives on the investor app. Read from the environment directly
+// (no ConfigService here), with the same fallback as config/app-urls.ts.
+const INVESTOR_APP_URL =
+  process.env.INVESTOR_URL || process.env.FRONTEND_URL || "http://localhost:8080";
 
 export function emailShell(opts: { heading: string; bodyHtml: string; ctaLabel?: string; ctaHref?: string }) {
   const cta =
@@ -22,7 +25,7 @@ export function emailShell(opts: { heading: string; bodyHtml: string; ctaLabel?:
           ${cta}
           <tr><td style="padding-top:32px;font-size:12px;color:#9aa39a;border-top:1px solid #eef0ed;margin-top:24px;padding-top:16px;">
             You're receiving this because it relates to your Endeleo account. Manage alerts under
-            <a href="${FRONTEND_URL}/dashboard/settings" style="color:#0f6b4f;">Settings</a>.
+            <a href="${INVESTOR_APP_URL}/dashboard/settings" style="color:#0f6b4f;">Settings</a>.
           </td></tr>
         </table>
       </td></tr>

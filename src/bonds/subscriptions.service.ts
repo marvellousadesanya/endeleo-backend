@@ -12,13 +12,15 @@ import { naira } from "@/email/money-format";
 import { PaymentAdapter } from "./adapters/payment.adapter";
 import { toMinor } from "./dto/bonds.dto";
 import { refundEscrowAndRecord } from "./escrow-refund";
+import { linkTo } from "@/config/app-urls";
 
 /** Investors get 48 hours to change their mind. */
 const COOLING_OFF_HOURS = 48;
 
 @Injectable()
 export class SubscriptionsService {
-  private readonly frontendUrl: string;
+  /** A link to `path` on the frontend app that owns it — see config/app-urls.ts. */
+  private readonly link: (path: string) => string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -27,7 +29,7 @@ export class SubscriptionsService {
     private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
-    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+    this.link = (path) => linkTo(config, path);
   }
 
   /** Escrow has become units: the holding is real and the cooling-off window has closed. */
@@ -51,7 +53,7 @@ export class SubscriptionsService {
           `<p>Coupon payments will be paid to your Endeleo wallet on the bond's schedule, ` +
           `and your principal is returned at maturity.</p>`,
         ctaLabel: "View portfolio",
-        ctaHref: `${this.frontendUrl}/dashboard/portfolio`,
+        ctaHref: this.link(`/dashboard/portfolio`),
       },
     });
   }
@@ -119,7 +121,7 @@ export class SubscriptionsService {
             `${COOLING_OFF_HOURS} hours to cancel for a full refund; after that your ` +
             `subscription is allocated into units and the holding becomes yours.</p>`,
           ctaLabel: "View portfolio",
-          ctaHref: `${this.frontendUrl}/dashboard/portfolio`,
+          ctaHref: this.link(`/dashboard/portfolio`),
         },
       })
       .catch(() => {});

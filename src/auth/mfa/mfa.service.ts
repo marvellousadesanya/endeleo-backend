@@ -5,6 +5,7 @@ import * as QRCode from "qrcode";
 import { PrismaService } from "@/database/prisma.service";
 import { NotificationsService } from "@/notifications/notifications.service";
 import { codeForStep, currentStep, generateSecret, otpauthUri, verifyCode } from "./totp";
+import { linkTo } from "@/config/app-urls";
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
 /** Enough for a fat-fingered code or two, few enough to make guessing hopeless. */
@@ -26,7 +27,6 @@ export class MfaService {
    * cannot be turned off, so it does not consult notification preferences.
    */
   private async alertSecurityChange(userId: string, enabled: boolean) {
-    const frontendUrl = this.config.get<string>("FRONTEND_URL") ?? "";
     await this.notifications
       .notify({
         userId,
@@ -50,7 +50,7 @@ export class MfaService {
               `<p><strong>If this was not you, your account may be compromised.</strong> ` +
               `Change your password and re-enable two-factor authentication now.</p>`,
           ctaLabel: "Review security settings",
-          ctaHref: `${frontendUrl}/dashboard/security`,
+          ctaHref: linkTo(this.config, "/dashboard/security"),
         },
       })
       .catch(() => {});

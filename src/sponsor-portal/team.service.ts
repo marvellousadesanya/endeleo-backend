@@ -15,17 +15,21 @@ import { NotificationsService } from "@/notifications/notifications.service";
 import { emailShell } from "@/email/email-templates";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import type { InviteTeamMemberDto, UpdateTeamMemberDto } from "./dto/team.dto";
+import { linkTo, appUrl } from "@/config/app-urls";
 
 @Injectable()
 export class TeamService {
-  private readonly frontendUrl: string;
+  /** A link to `path` on the frontend app that owns it — see config/app-urls.ts. */
+  private readonly link: (path: string) => string;
+  private readonly config: ConfigService;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
-    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+    this.link = (path) => linkTo(config, path);
+    this.config = config;
   }
 
   async list(user: AuthUser) {
@@ -89,7 +93,7 @@ export class TeamService {
           subject: `${ownerName} invited you to their team`,
           bodyHtml,
           ctaLabel: "Open your dashboard",
-          ctaHref: `${this.frontendUrl}/sponsor`,
+          ctaHref: this.link(`/sponsor`),
         },
       });
     } else {
@@ -97,7 +101,7 @@ export class TeamService {
         heading: "You've been invited to a team on Endeleo",
         bodyHtml,
         ctaLabel: "Create your account",
-        ctaHref: `${this.frontendUrl}/auth?email=${encodeURIComponent(email)}`,
+        ctaHref: `${appUrl(this.config, "sponsor")}/auth?email=${encodeURIComponent(email)}`,
       });
       await this.notifications.emailAddress(email, `${ownerName} invited you to their team on Endeleo`, html);
     }

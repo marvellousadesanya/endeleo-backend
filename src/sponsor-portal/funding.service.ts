@@ -9,6 +9,7 @@ import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import { assertOwnsBond } from "@/bonds/bond-ownership";
 import type { CreateMilestoneDto, UpdateMilestoneDto } from "./dto/funding.dto";
+import { linkTo } from "@/config/app-urls";
 
 // Minor units → a plain "1,234,567" string — good enough for an email line; the app's
 // own fmtMinor (currency-aware, client-side) is what the dashboard itself uses.
@@ -18,14 +19,15 @@ function fmtMajor(minor: bigint): string {
 
 @Injectable()
 export class FundingService {
-  private readonly frontendUrl: string;
+  /** A link to `path` on the frontend app that owns it — see config/app-urls.ts. */
+  private readonly link: (path: string) => string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
-    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+    this.link = (path) => linkTo(config, path);
   }
 
 
@@ -93,7 +95,7 @@ export class FundingService {
           subject: `Released: ${updated.label}`,
           bodyHtml: `<p><strong>${existing.bond.title}</strong> — <strong>${existing.bond.currency} ${fmtMajor(updated.targetMinor)}</strong> for "${updated.label}" has been released.</p>`,
           ctaLabel: "View funding",
-          ctaHref: `${this.frontendUrl}/sponsor/funding`,
+          ctaHref: this.link(`/sponsor/funding`),
         },
       });
     }

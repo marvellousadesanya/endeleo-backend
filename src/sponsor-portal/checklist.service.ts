@@ -7,6 +7,7 @@ import { PrismaService } from "@/database/prisma.service";
 import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import { assertOwnsBond } from "@/bonds/bond-ownership";
+import { linkTo } from "@/config/app-urls";
 import type {
   AdminUpdateChecklistItemDto,
   CreateChecklistItemDto,
@@ -15,14 +16,15 @@ import type {
 
 @Injectable()
 export class ChecklistService {
-  private readonly frontendUrl: string;
+  /** A link to `path` on the frontend app that owns it — see config/app-urls.ts. */
+  private readonly link: (path: string) => string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
-    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+    this.link = (path) => linkTo(config, path);
   }
 
 
@@ -127,7 +129,7 @@ export class ChecklistService {
           subject: `Verified: ${item.label}`,
           bodyHtml: `<p><strong>${item.bond.title}</strong> — "${item.label}" has been verified. No further action needed on this item.</p>`,
           ctaLabel: "View checklist",
-          ctaHref: `${this.frontendUrl}/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`,
+          ctaHref: this.link(`/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`),
         },
       });
     } else if (dto.status === "rejected") {
@@ -141,7 +143,7 @@ export class ChecklistService {
           subject: `Action needed: ${item.label}`,
           bodyHtml: `<p><strong>${item.bond.title}</strong> — "${item.label}" was rejected and needs another look.</p>${dto.notes ? `<p style="color:#8a4b1c;background:#fdf3e7;border-radius:8px;padding:10px 14px;">${dto.notes}</p>` : ""}`,
           ctaLabel: "Review and resubmit",
-          ctaHref: `${this.frontendUrl}/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`,
+          ctaHref: this.link(`/sponsor/${item.kind === "compliance" ? "compliance" : "due-diligence"}`),
         },
       });
     }

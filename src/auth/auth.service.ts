@@ -22,6 +22,7 @@ import {
 import { deviceSignature, isUnrecognisedDevice, signInAlertEmail } from "./sign-in-alert";
 import { resolveReturnOrigin } from "@/config/return-origin";
 import { MfaService } from "./mfa/mfa.service";
+import { appUrl } from "@/config/app-urls";
 
 export interface TokenPair {
   accessToken: string;
@@ -91,7 +92,7 @@ export class AuthService {
     // Not awaited: a signup must not hang because a mail provider is slow.
     void sendWelcomeEmail(
       this.email,
-      this.config.getOrThrow<string>("FRONTEND_URL"),
+      appUrl(this.config, "investor"),
       user.email,
       input.fullName,
     );
@@ -157,7 +158,7 @@ export class AuthService {
       const { subject, html } = signInAlertEmail({
         device: deviceSignature(userAgent),
         when: new Date(),
-        frontendUrl: this.config.getOrThrow<string>("FRONTEND_URL"),
+        frontendUrl: appUrl(this.config, "investor"),
       });
       await this.email.send(user.email, subject, html);
     } catch {
@@ -315,7 +316,7 @@ export class AuthService {
     // step. It is also the alarm if the reset was not the account holder's doing.
     void sendPasswordChangedEmail(
       this.email,
-      this.config.getOrThrow<string>("FRONTEND_URL"),
+      appUrl(this.config, "investor"),
       row.user.email,
     );
 

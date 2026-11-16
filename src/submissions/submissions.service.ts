@@ -15,6 +15,7 @@ import { naira } from "@/email/money-format";
 import type { CreateBondDto } from "@/bonds/dto/bonds.dto";
 import type { CreateSubmissionDto, PromoteSubmissionDto, ReviewSubmissionDto } from "./dto/submissions.dto";
 import { canApprove, cascadeRevoke, isGatedModule, type GatedModule } from "./module-gates";
+import { linkTo } from "@/config/app-urls";
 
 /** Shape stored in the attachments JSON column. */
 interface StoredAttachment {
@@ -69,7 +70,8 @@ export function parseCashflows(raw: string | undefined): { year: number; revenue
 @Injectable()
 export class SubmissionsService {
   private readonly logger = new Logger(SubmissionsService.name);
-  private readonly frontendUrl: string;
+  /** A link to `path` on the frontend app that owns it — see config/app-urls.ts. */
+  private readonly link: (path: string) => string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -78,7 +80,7 @@ export class SubmissionsService {
     private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
-    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+    this.link = (path) => linkTo(config, path);
   }
 
   /** Adds the resolved public cover URL; the stored path itself is never exposed. */
@@ -338,7 +340,7 @@ export class SubmissionsService {
             `looks at it, and we aim to come back to you within 10 business days. You can follow ` +
             `its progress from your status tracker at any time.</p>`,
           ctaLabel: "View status tracker",
-          ctaHref: `${this.frontendUrl}/sponsor/projects`,
+          ctaHref: this.link(`/sponsor/projects`),
         });
         await this.notifications.emailAddress(
           submission.submitterEmail,
@@ -402,7 +404,7 @@ export class SubmissionsService {
             `<p>The arrangement screen — coverage, bankability and indicative pricing — is ` +
             `already computed and waiting on the submission page.</p>`,
           ctaLabel: "Open the screen",
-          ctaHref: `${this.frontendUrl}/admin/submissions/${submission.id}`,
+          ctaHref: this.link(`/admin/submissions/${submission.id}`),
         },
       });
     }
@@ -444,7 +446,7 @@ export class SubmissionsService {
       heading: entry.heading,
       bodyHtml: entry.body,
       ctaLabel: "View status tracker",
-      ctaHref: `${this.frontendUrl}/sponsor/projects`,
+      ctaHref: this.link(`/sponsor/projects`),
     });
     await this.notifications.emailAddress(submission.submitterEmail, entry.heading, html);
 
@@ -527,7 +529,7 @@ export class SubmissionsService {
         heading: "Your project is now live",
         bodyHtml: `<p><strong>${submission.projectTitle}</strong> has been promoted to a bond and is now on the Endeleo platform.</p>`,
         ctaLabel: "View your bond",
-        ctaHref: `${this.frontendUrl}/sponsor/documents`,
+        ctaHref: this.link(`/sponsor/documents`),
       });
       await this.notifications.emailAddress(submission.submitterEmail, "Your project is now live on Endeleo", html);
     }

@@ -10,6 +10,7 @@ import { EmailService } from "@/email/email.service";
 import { sendWelcomeEmail } from "../auth-emails";
 import { normaliseEmail, type UserWithRoles } from "@/users/users.service";
 import type { GoogleProfile } from "./google.provider";
+import { appUrl } from "@/config/app-urls";
 
 /** Long enough for a redirect, short enough to be useless if it leaks. */
 const EXCHANGE_CODE_TTL_MS = 60_000;
@@ -82,7 +83,7 @@ export class OAuthService {
     // not stall the redirect back from the provider.
     void sendWelcomeEmail(
       this.email,
-      this.config.getOrThrow<string>("FRONTEND_URL"),
+      appUrl(this.config, "investor"),
       created.email,
       created.fullName,
     );

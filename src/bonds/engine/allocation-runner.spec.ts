@@ -32,7 +32,8 @@ function makeRunner(opts: {
   };
   const notifications: any = { notify: vi.fn(async () => {}) };
   const subscriptions: any = { allocate: vi.fn(opts.allocate ?? (async () => ({ id: "h1" }))) };
-  const config: any = { getOrThrow: () => "https://application.endeleo.online" };
+  // get: no per-app URL set, so links fall back to FRONTEND_URL (config/app-urls.ts).
+  const config: any = { get: () => undefined, getOrThrow: () => "https://application.endeleo.online" };
 
   const runner = new AllocationRunnerService(prisma, audit, payments, notifications, subscriptions, config);
   return { runner, prisma, audit, payments, notifications, subscriptions };

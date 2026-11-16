@@ -19,6 +19,7 @@ import { naira } from "@/email/money-format";
 import { PaymentAdapter } from "../adapters/payment.adapter";
 import { SubscriptionsService } from "../subscriptions.service";
 import { refundEscrowAndRecord } from "../escrow-refund";
+import { linkTo } from "@/config/app-urls";
 
 /** The procedure's refusals that mean "this will never allocate", so the money goes back. */
 const REFUSALS = {
@@ -47,7 +48,8 @@ type DueSubscription = {
 @Injectable()
 export class AllocationRunnerService {
   private readonly logger = new Logger(AllocationRunnerService.name);
-  private readonly frontendUrl: string;
+  /** A link to `path` on the frontend app that owns it — see config/app-urls.ts. */
+  private readonly link: (path: string) => string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -57,7 +59,7 @@ export class AllocationRunnerService {
     private readonly subscriptions: SubscriptionsService,
     config: ConfigService,
   ) {
-    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+    this.link = (path) => linkTo(config, path);
   }
 
   /** `asOf` lets the simulation harness run this at a pretend date. */
@@ -151,7 +153,7 @@ export class AllocationRunnerService {
           `to <strong>${bond.title}</strong>, because ${REFUSALS[reason]}.</p>` +
           `<p>The full amount has been returned to your Endeleo wallet.</p>`,
         ctaLabel: "View wallet",
-        ctaHref: `${this.frontendUrl}/dashboard/wallet`,
+        ctaHref: this.link(`/dashboard/wallet`),
       },
     });
   }

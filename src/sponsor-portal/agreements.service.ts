@@ -9,10 +9,12 @@ import { NotificationsService } from "@/notifications/notifications.service";
 import type { AuthUser } from "@/auth/jwt.strategy";
 import { assertOwnsBond } from "@/bonds/bond-ownership";
 import type { SignAgreementDto, UpsertAgreementDto } from "./dto/agreements.dto";
+import { linkTo } from "@/config/app-urls";
 
 @Injectable()
 export class AgreementsService {
-  private readonly frontendUrl: string;
+  /** A link to `path` on the frontend app that owns it — see config/app-urls.ts. */
+  private readonly link: (path: string) => string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -20,7 +22,7 @@ export class AgreementsService {
     private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
-    this.frontendUrl = config.getOrThrow<string>("FRONTEND_URL");
+    this.link = (path) => linkTo(config, path);
   }
 
 
@@ -123,7 +125,7 @@ export class AgreementsService {
             subject: `Please sign: ${updated.title}`,
             bodyHtml: `<p><strong>${previous.bond.title}</strong> — "${updated.title}" has been sent and is ready for your signature.</p>`,
             ctaLabel: "Review and sign",
-            ctaHref: `${this.frontendUrl}/sponsor/agreements`,
+            ctaHref: this.link(`/sponsor/agreements`),
           },
         });
       }

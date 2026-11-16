@@ -11,6 +11,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NotificationsService } from "@/notifications/notifications.service";
 import { renderNotification, type NotificationTemplate } from "./notification-copy";
+import { linkTo } from "@/config/app-urls";
 
 export type { NotificationTemplate };
 
@@ -29,7 +30,6 @@ export class NotificationAdapter {
     data?: Record<string, unknown>;
   }): Promise<void> {
     const copy = renderNotification(args.template, args.data ?? {});
-    const frontendUrl = this.config.get<string>("FRONTEND_URL") ?? "";
 
     try {
       await this.notifications.notify({
@@ -41,7 +41,7 @@ export class NotificationAdapter {
           subject: copy.subject ?? copy.title,
           bodyHtml: copy.bodyHtml ?? `<p>${copy.body}</p>`,
           ctaLabel: copy.ctaLabel,
-          ctaHref: copy.href ? `${frontendUrl}${copy.href}` : undefined,
+          ctaHref: copy.href ? linkTo(this.config, copy.href) : undefined,
         },
       });
     } catch (err) {
